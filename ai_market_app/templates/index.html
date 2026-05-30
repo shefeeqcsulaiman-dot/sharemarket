@@ -36,8 +36,27 @@
         .skeleton { background: linear-gradient(90deg, #1e293b 25%, #243048 50%, #1e293b 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 6px; }
         @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 
-        .loading-overlay { pointer-events: none; }
-        .loading-overlay .card, .loading-overlay .glass { opacity: 0.55; transition: opacity .25s; }
+        /* symbol-switch loader overlay */
+        #loadingOverlay {
+            display: none;
+            position: absolute; inset: 0; z-index: 40;
+            background: rgba(8,12,20,0.72);
+            backdrop-filter: blur(3px);
+            align-items: center; justify-content: center;
+            flex-direction: column; gap: 14px;
+            border-radius: 0;
+        }
+        #loadingOverlay.show { display: flex; }
+        .spinner {
+            width: 40px; height: 40px;
+            border: 3px solid rgba(99,102,241,0.2);
+            border-top-color: #6366f1;
+            border-radius: 50%;
+            animation: spin 0.75s linear infinite;
+        }
+        /* dim cards while full-signal refresh runs (not symbol switch) */
+        .signal-loading .card,
+        .signal-loading .glass { opacity: 0.6; pointer-events: none; transition: opacity .2s; }
 
         .pulse-dot { animation: pulse-dot 2s cubic-bezier(0.4,0,0.6,1) infinite; }
         @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.4} }
@@ -58,6 +77,17 @@
     </style>
 </head>
 <body class="min-h-screen flex flex-col">
+
+<!-- ─── MARKET BAR ─── -->
+<div id="marketBar" class="bg-[#060a12] border-b border-white/[.04] px-5 py-2 flex items-center gap-6 overflow-x-auto text-xs font-mono">
+    <span class="text-gray-600 shrink-0">LIVE MARKETS</span>
+    <div id="mbNIFTY"    class="flex items-center gap-1.5 shrink-0"><span class="text-gray-500">NIFTY</span><span class="text-gray-300 font-bold">—</span></div>
+    <div id="mbBANKNIFTY" class="flex items-center gap-1.5 shrink-0"><span class="text-gray-500">BANKNIFTY</span><span class="text-gray-300 font-bold">—</span></div>
+    <span class="text-gray-800">|</span>
+    <div id="mbDOW"     class="flex items-center gap-1.5 shrink-0"><span class="text-gray-500">DOW</span><span class="text-gray-300 font-bold">—</span><span class="text-gray-600">—</span></div>
+    <div id="mbNASDAQ"  class="flex items-center gap-1.5 shrink-0"><span class="text-gray-500">NASDAQ</span><span class="text-gray-300 font-bold">—</span><span class="text-gray-600">—</span></div>
+    <div id="mbSP500"   class="flex items-center gap-1.5 shrink-0"><span class="text-gray-500">S&amp;P 500</span><span class="text-gray-300 font-bold">—</span><span class="text-gray-600">—</span></div>
+</div>
 
 <!-- ─── HEADER ─── -->
 <header class="glass sticky top-0 z-50 border-b border-white/5 px-5 py-3 flex items-center justify-between gap-3">
@@ -175,7 +205,15 @@
     </aside>
 
     <!-- MAIN CONTENT -->
-    <main class="flex-1 overflow-y-auto p-5 space-y-4" id="mainContent">
+    <main class="flex-1 overflow-y-auto p-5 space-y-4 relative" id="mainContent">
+        <!-- Symbol-switch loading overlay -->
+        <div id="loadingOverlay">
+            <div class="spinner"></div>
+            <div class="text-center">
+                <p id="loadingSymbolName" class="text-lg font-bold text-gray-100 font-mono tracking-tight">—</p>
+                <p class="text-xs text-gray-500 mt-1">Fetching live data…</p>
+            </div>
+        </div>
 
         <!-- Error banner -->
         <div id="errorBanner" class="hidden rounded-xl border border-red-900/50 bg-red-950/25 px-4 py-3 text-sm text-red-300 flex items-center gap-2">
@@ -324,7 +362,7 @@
                     </div>
                     <div>
                         <div class="flex justify-between text-xs font-mono mb-1.5">
-                            <span class="text-gray-400">Options (30%)</span>
+                            <span id="labelO" class="text-gray-400">Options (30%)</span>
                             <span id="scoreO" class="font-bold text-blue-400">—</span>
                         </div>
                         <div class="h-1.5 bg-gray-900 rounded-full overflow-hidden">
@@ -362,6 +400,51 @@
                     <span class="bg-white/[.04] border border-white/[.07] rounded-full px-2.5 py-1 text-gray-400">
                         Pain: <strong id="maxPainChip" class="text-amber-400">—</strong>
                     </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Commentary + Volatility + Patterns -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+            <!-- AI Commentary -->
+            <div class="card p-5 lg:col-span-2">
+                <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5 mb-3">
+                    <i data-lucide="sparkles" class="w-3.5 h-3.5 text-indigo-400"></i>AI Market Commentary
+                </h3>
+                <p id="aiCommentary" class="text-sm text-gray-300 leading-relaxed">Analysing market conditions…</p>
+            </div>
+
+            <!-- Volatility + Patterns -->
+            <div class="card p-5 space-y-4">
+                <!-- Volatility regime -->
+                <div>
+                    <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5 mb-2">
+                        <i data-lucide="activity" class="w-3.5 h-3.5 text-indigo-400"></i>Volatility Regime
+                    </h3>
+                    <div class="flex items-center gap-3">
+                        <span id="volRegimeBadge" class="text-xs font-bold font-mono px-2.5 py-1 rounded-full bg-gray-800 text-gray-300">—</span>
+                        <div class="flex-1">
+                            <div class="flex justify-between text-[10px] font-mono text-gray-600 mb-1">
+                                <span>ATR%: <strong id="volAtrPct" class="text-gray-400">—</strong></span>
+                                <span>HV20: <strong id="volHv" class="text-gray-400">—</strong></span>
+                                <span>Pct: <strong id="volPct" class="text-gray-400">—</strong></span>
+                            </div>
+                            <div class="h-1.5 bg-gray-900 rounded-full overflow-hidden">
+                                <div id="volBar" class="h-full rounded-full transition-all duration-500 bg-emerald-500" style="width:50%"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <p id="volRec" class="text-[11px] text-gray-500 mt-2">—</p>
+                </div>
+
+                <!-- Candlestick patterns -->
+                <div class="border-t border-white/5 pt-4">
+                    <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5 mb-2">
+                        <i data-lucide="bar-chart-2" class="w-3.5 h-3.5 text-indigo-400"></i>Pattern AI
+                    </h3>
+                    <div id="patternBadge" class="text-xs font-mono text-gray-500">No pattern detected</div>
+                    <div id="patternList" class="mt-2 space-y-1"></div>
                 </div>
             </div>
         </div>
@@ -502,7 +585,7 @@
 
     // ── State ──────────────────────────────────────────────────────────────
     const symbols = {{ symbols | tojson }};
-    let currentSymbol = symbols[0] || 'VEDL';
+    let currentSymbol = 'VEDL';  // default
     let currentTf = '5m';
     let fullRefreshId  = null;   // 30 s full-signal refresh
     let tickId         = null;   // 5 s fast price tick
@@ -574,24 +657,16 @@
             if (c.vwap[i]   != null) vwap.push({ time: t, value: c.vwap[i] });
         }
 
-        // RSI approximated from close prices (14-period)
-        const closes = c.closes;
-        let gains = 0, losses = 0;
-        for (let i = 1; i <= 14 && i < closes.length; i++) {
-            const d = closes[i] - closes[i-1];
-            if (d > 0) gains += d; else losses -= d;
-        }
-        let avgGain = gains / 14, avgLoss = losses / 14;
-        for (let i = 14; i < closes.length; i++) {
+        // FIX: use server-computed RSI directly (no JS recalculation)
+        const rsiArr = c.rsi || [];
+        for (let i = 0; i < len; i++) {
             const t = isoToUnix(c.timestamps[i]);
-            const d = closes[i] - closes[i-1];
-            avgGain = (avgGain * 13 + (d > 0 ? d : 0)) / 14;
-            avgLoss = (avgLoss * 13 + (d < 0 ? -d : 0)) / 14;
-            const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-            const rsiVal = 100 - (100 / (1 + rs));
-            rsi.push({ time: t, value: rsiVal });
-            r70.push({ time: t, value: 70 });
-            r30.push({ time: t, value: 30 });
+            if (!t || isNaN(t)) continue;
+            if (rsiArr[i] != null && !isNaN(rsiArr[i])) {
+                rsi.push({ time: t, value: rsiArr[i] });
+                r70.push({ time: t, value: 70 });
+                r30.push({ time: t, value: 30 });
+            }
         }
 
         candleSeries.setData(candles);
@@ -688,20 +763,71 @@
         if (method === 'oi_walls') { oiSB.classList.remove('hidden'); oiRB.classList.remove('hidden'); }
         else { oiSB.classList.add('hidden'); oiRB.classList.add('hidden'); }
 
-        // CE options table
+        // CE options table (fix expiry)
         renderCETable(data.ce_list || [], data.options, data.quote.ltp);
+        if (data.options.expiry) document.getElementById('ceExpiry').textContent = data.options.expiry;
 
-        // Scores
+        // Scores — update weights label dynamically
         const sc = data.scores;
+        const wt = data.signal.weights_used || [0.40, 0.30, 0.20, 0.10];
         document.getElementById('scoreT').textContent = `${sc.technical}/100`; document.getElementById('barT').style.width = `${sc.technical}%`;
         document.getElementById('scoreO').textContent = `${sc.options}/100`;   document.getElementById('barO').style.width = `${sc.options}%`;
         document.getElementById('scoreN').textContent = `${sc.news}/100`;      document.getElementById('barN').style.width = `${sc.news}%`;
         document.getElementById('scoreM').textContent = `${sc.market}/100`;    document.getElementById('barM').style.width = `${sc.market}%`;
+        document.getElementById('labelO').textContent = `Options (${Math.round((wt[1]||0.3)*100)}%)`;
 
         // Option bias chips
         document.getElementById('optionBiasChip').textContent = fmt(data.options.directional_bias);
         document.getElementById('pcrChip').textContent        = fmt(data.options.pcr);
         document.getElementById('maxPainChip').textContent    = money(data.options.max_pain);
+
+        // AI Commentary
+        document.getElementById('aiCommentary').textContent = data.commentary || '—';
+
+        // Volatility regime
+        const vol = data.volatility || {};
+        const regimeColors = { low: '#10b981', normal: '#6366f1', high: '#ef4444' };
+        const regimeLabels = { low: 'LOW VOL', normal: 'NORMAL', high: 'HIGH VOL' };
+        const regime = vol.regime || 'normal';
+        const vBadge = document.getElementById('volRegimeBadge');
+        vBadge.textContent = regimeLabels[regime] || regime.toUpperCase();
+        vBadge.style.background = (regimeColors[regime] || '#6366f1') + '22';
+        vBadge.style.color = regimeColors[regime] || '#6366f1';
+        vBadge.style.border = `1px solid ${regimeColors[regime] || '#6366f1'}55`;
+        document.getElementById('volAtrPct').textContent = vol.atr_pct ? `${vol.atr_pct}%` : '—';
+        document.getElementById('volHv').textContent     = vol.hv20    ? `${vol.hv20}%`     : '—';
+        document.getElementById('volPct').textContent    = vol.percentile ? `${vol.percentile}th` : '—';
+        document.getElementById('volRec').textContent    = vol.recommendation || '—';
+        const vBar = document.getElementById('volBar');
+        vBar.style.width = `${Math.min(vol.percentile || 50, 100)}%`;
+        vBar.style.background = regime === 'high' ? '#ef4444' : regime === 'low' ? '#10b981' : '#6366f1';
+
+        // Candlestick patterns
+        const pat = data.patterns || {};
+        const pBadge = document.getElementById('patternBadge');
+        if (pat.strongest) {
+            const pColor = pat.direction === 'bullish' ? '#10b981' : pat.direction === 'bearish' ? '#ef4444' : '#9ca3af';
+            pBadge.innerHTML = `<span style="color:${pColor}" class="font-bold">${pat.strongest}</span> <span class="text-gray-600">— ${pat.direction} (+${pat.score_bonus}pts)</span>`;
+        } else {
+            pBadge.textContent = 'No pattern detected on last 5 bars';
+        }
+        document.getElementById('patternList').innerHTML = (pat.found || []).map(p =>
+            `<div class="text-[11px] font-mono text-gray-500 flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>${p}
+            </div>`).join('');
+
+        // Signal: volatility regime + pattern badges on signal card
+        const volTag = document.getElementById('signalVolTag') || (() => {
+            const t = document.createElement('span');
+            t.id = 'signalVolTag';
+            t.className = 'text-[10px] font-mono px-2 py-0.5 rounded-full border';
+            document.getElementById('invalidIfText').parentNode.insertBefore(t, document.getElementById('invalidIfText'));
+            return t;
+        })();
+        volTag.textContent = `Regime: ${regime.toUpperCase()}`;
+        volTag.style.color = regimeColors[regime] || '#6366f1';
+        volTag.style.borderColor = (regimeColors[regime] || '#6366f1') + '44';
+        volTag.style.background = (regimeColors[regime] || '#6366f1') + '11';
 
         // Technicals sidebar
         const tech = data.technicals;
@@ -735,16 +861,18 @@
         // News
         const newsColor = { positive: 'emerald', negative: 'red', neutral: 'gray' };
         document.getElementById('newsSentimentBadge').textContent = (data.news.sentiment || 'neutral').toUpperCase();
-        document.getElementById('newsSentimentBadge').style.color  = newsColor[data.news.sentiment] === 'emerald' ? '#10b981' : newsColor[data.news.sentiment] === 'red' ? '#ef4444' : '#9ca3af';
-        document.getElementById('newsImpactBadge').textContent     = (data.news.impact || 'low').toUpperCase();
+        // FIX: direct hex lookup, not via intermediate 'emerald'/'red' string
+        const sentHex = { positive: '#10b981', negative: '#ef4444', neutral: '#9ca3af' };
+        document.getElementById('newsSentimentBadge').style.color = sentHex[data.news.sentiment] || '#9ca3af';
+        document.getElementById('newsImpactBadge').textContent    = (data.news.impact || 'low').toUpperCase();
         document.getElementById('newsContainer').innerHTML = (data.news.items || []).map(item => {
-            const sc = newsColor[item.sentiment] || 'gray';
-            const borderColor = sc === 'emerald' ? '#10b981' : sc === 'red' ? '#ef4444' : '#4b5563';
+            const borderColor = sentHex[item.sentiment] || '#4b5563';
+            const hiTag = item.is_high_impact ? ' &bull; <strong>HIGH IMPACT</strong>' : '';
             return `<div class="flex gap-3 rounded-xl bg-white/[.03] border border-white/[.05] px-3 py-2.5 hover:border-white/10 transition">
                 <div class="w-0.5 shrink-0 rounded-full self-stretch" style="background:${borderColor}"></div>
                 <div>
                     <p class="text-xs font-medium text-gray-200 leading-snug">${item.title}</p>
-                    <span class="text-[10px] font-mono mt-1 inline-block" style="color:${borderColor}">${(item.sentiment || 'neutral').toUpperCase()}</span>
+                    <span class="text-[10px] font-mono mt-1 inline-block" style="color:${borderColor}">${(item.sentiment || 'neutral').toUpperCase()}${hiTag}</span>
                 </div>
             </div>`;
         }).join('') || '<p class="text-xs text-gray-600">No news available.</p>';
@@ -858,18 +986,30 @@
             document.getElementById('dataStatusLabel').textContent =
                 q.source === 'nse' ? 'NSE LIVE' : q.source === 'yahoo' ? 'YAHOO (~15m)' : 'SAMPLE DATA';
 
+            // FIX: update ALL symbol prices by fetching all symbols on tick rotation
             symbolPrices[currentSymbol] = { ltp: q.ltp, change: q.change_text, up: isUp };
             renderSymbolButtons();
+            // Background-fetch other symbol prices (non-blocking, best-effort)
+            symbols.filter(s => s !== currentSymbol).forEach(s => {
+                fetch(`/api/quote/${s}`).then(r => r.ok ? r.json() : null).then(qr => {
+                    if (qr) symbolPrices[s] = { ltp: qr.ltp, change: qr.change_text, up: qr.change_pct >= 0 };
+                    renderSymbolButtons();
+                }).catch(() => {});
+            });
         } catch (_) {}
     }
 
     // ── Full signal fetch ──────────────────────────────────────────────────
     async function fetchSignal() {
-        const btn  = document.getElementById('refreshBtn');
-        const icon = document.getElementById('refreshIcon');
-        document.getElementById('mainContent').classList.add('loading-overlay');
+        const btn      = document.getElementById('refreshBtn');
+        const icon     = document.getElementById('refreshIcon');
+        const main     = document.getElementById('mainContent');
+        const isSwitch = document.getElementById('loadingOverlay').classList.contains('show');
+
+        // For auto-refresh (not symbol switch) use a lighter dim
+        if (!isSwitch) main.classList.add('signal-loading');
         btn.disabled = true;
-        icon.style.animation = 'spin 1s linear infinite';
+        icon.style.animation = 'spin 0.75s linear infinite';
         document.getElementById('errorBanner').classList.add('hidden');
 
         try {
@@ -888,7 +1028,8 @@
             document.getElementById('errorText').textContent = 'Cannot reach server. Is Flask running?';
             document.getElementById('errorBanner').classList.remove('hidden');
         } finally {
-            document.getElementById('mainContent').classList.remove('loading-overlay');
+            hideSymbolLoader();
+            main.classList.remove('signal-loading');
             btn.disabled = false;
             icon.style.animation = '';
         }
@@ -915,7 +1056,32 @@
         fullRefreshId = null; tickId = null; countdownId = null;
     }
 
-    function selectSymbol(sym) { currentSymbol = sym; renderSymbolButtons(); fetchSignal(); }
+    function showSymbolLoader(sym) {
+        document.getElementById('loadingSymbolName').textContent = sym;
+        document.getElementById('loadingOverlay').classList.add('show');
+        // immediately blank out stale price/signal so old data doesn't linger
+        ['ltpValue','changeValue','vwapValue','volumeValue',
+         'signalText','confidenceValue','riskValue','strategyValue',
+         'entryLevel','target1Level','target2Level','slLevel','rrValue',
+         'oiSupportRef','oiResistRef','companyName','sectorText'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) { el.textContent = '—'; el.style.color = ''; }
+        });
+        document.getElementById('ceTableBody').innerHTML =
+            '<tr><td colspan="10" class="py-6 text-center text-gray-600 text-xs">Loading…</td></tr>';
+        document.getElementById('reasonsContainer').innerHTML = '';
+    }
+
+    function hideSymbolLoader() {
+        document.getElementById('loadingOverlay').classList.remove('show');
+    }
+
+    function selectSymbol(sym) {
+        currentSymbol = sym;
+        renderSymbolButtons();
+        showSymbolLoader(sym);
+        fetchSignal();
+    }
 
     // ── Event wiring ───────────────────────────────────────────────────────
     document.getElementById('marketScore').addEventListener('input', () => {
@@ -944,10 +1110,38 @@
         rsiChart.resize(document.getElementById('rsiContainer').clientWidth, 80);
     });
 
+    // ── Market bar ────────────────────────────────────────────────────────
+    function updateMarketBar() {
+        fetch('/api/market-bar').then(r => r.json()).then(data => {
+            const fmt2 = v => v != null ? Number(v).toLocaleString('en-IN', {maximumFractionDigits:2}) : '—';
+            // Indian indices
+            ['NIFTY','BANKNIFTY'].forEach(sym => {
+                const d = data[sym]; if (!d) return;
+                const el = document.getElementById(`mb${sym}`);
+                if (!el) return;
+                el.querySelector('span:last-child').textContent = fmt2(d.ltp);
+            });
+            // US indices
+            ['DOW','NASDAQ','SP500'].forEach(sym => {
+                const d = data[sym]; if (!d) return;
+                const el = document.getElementById(`mb${sym}`);
+                if (!el) return;
+                const spans = el.querySelectorAll('span');
+                spans[1].textContent = fmt2(d.ltp);
+                if (spans[2] && d.change) {
+                    spans[2].textContent = d.change;
+                    spans[2].style.color = d.up ? '#10b981' : '#ef4444';
+                }
+            });
+        }).catch(() => {});
+    }
+
     // ── Init ───────────────────────────────────────────────────────────────
     renderSymbolButtons();
     fetchSignal();
     startTimers();   // auto-refresh ON by default
+    updateMarketBar();
+    setInterval(updateMarketBar, 30000);  // refresh market bar every 30s
 </script>
 </body>
 </html>

@@ -28,11 +28,11 @@ _NSE_TZ  = ZoneInfo("Asia/Kolkata")
 # ── Instrument keys (NSE_EQ|ISIN) ────────────────────────────────────────────
 INSTRUMENT_KEYS = {
     "NIFTY":     "NSE_INDEX|Nifty 50",
+    "BANKNIFTY": "NSE_INDEX|Nifty Bank",
     "VEDL":      "NSE_EQ|INE205A01025",
     "SUZLON":    "NSE_EQ|INE040H01021",
     "CDSL":      "NSE_EQ|INE736A01011",
     "KITEX":     "NSE_EQ|INE602G01020",
-    # related symbols kept for option chain cross-reference
     "INOXWIND":  "NSE_EQ|INE066P01011",
     "KPIGREEN":  "NSE_EQ|INE542W01025",
 }

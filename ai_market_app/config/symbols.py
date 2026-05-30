@@ -1,12 +1,4 @@
 SYMBOLS = {
-    "NIFTY": {
-        "name": "Nifty 50 Index",
-        "nse_symbol": "NIFTY",
-        "upstox_key": "NSE_INDEX|Nifty 50",
-        "sector": "Index",
-        "has_options": True,
-        "related": ["VEDL", "CDSL"]
-    },
     "VEDL": {
         "name": "Vedanta Ltd",
         "nse_symbol": "VEDL",
@@ -39,4 +31,10 @@ SYMBOLS = {
         "has_options": False,
         "related": []
     },
+}
+
+# Indices shown in the top market bar (not in signal sidebar)
+MARKET_BAR_INDICES = {
+    "NIFTY":   {"name": "Nifty 50",  "upstox_key": "NSE_INDEX|Nifty 50"},
+    "BANKNIFTY": {"name": "Bank Nifty", "upstox_key": "NSE_INDEX|Nifty Bank"},
 }

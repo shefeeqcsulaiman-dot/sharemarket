@@ -1,74 +1,135 @@
-def generate_signal(symbol: str, technical: dict, option: dict, news: dict, market_score: int = 50) -> dict:
-    final_score = (
-        technical["score"] * 0.40 +
-        option["score"] * 0.30 +
-        news["score"] * 0.20 +
-        market_score * 0.10
-    )
-    final_score = round(final_score, 2)
+"""
+Signal engine: combines technical, options, news, volatility and pattern scores
+into a final trading signal with confidence and risk rating.
+"""
 
-    all_reasons = []
-    all_reasons.extend(technical.get("reasons", []))
-    all_reasons.extend(option.get("reasons", []))
-    all_reasons.extend(news.get("reasons", []))
+from datetime import datetime
 
-    if final_score >= 75:
-        signal = "BUY"
-    elif 65 <= final_score < 75:
-        signal = "BUY"
-    elif 55 <= final_score < 65:
-        signal = "WATCH"
-    elif 45 <= final_score < 55:
-        signal = "NEUTRAL"
-    elif 35 <= final_score < 45:
-        signal = "WATCH"
+
+def generate_signal(
+    symbol: str,
+    technical: dict,
+    option: dict,
+    news: dict,
+    market_score: int = 50,
+    volatility: dict | None = None,
+    patterns: dict | None = None,
+) -> dict:
+    vol   = volatility or {}
+    pat   = patterns   or {}
+
+    t_score = float(technical.get("score", 50) or 50)
+    o_score = float(option.get("score",    50) or 50)
+    n_score = float(news.get("score",      50) or 50)
+    m_score = float(market_score)
+
+    # Volatility regime weight adjustment
+    regime = vol.get("regime", "normal")
+    if regime == "high":
+        # In high-vol, options data is more reliable; weight it heavier
+        weights = (0.30, 0.40, 0.15, 0.10, 0.05)
+    elif regime == "low":
+        # In low-vol, technicals are cleaner signals
+        weights = (0.50, 0.20, 0.20, 0.10, 0.00)
     else:
-        signal = "AVOID"
+        weights = (0.40, 0.30, 0.20, 0.10, 0.00)
 
+    # Pattern bonus (max +8)
+    p_bonus = min(pat.get("score_bonus", 0), 8)
+
+    final_score = (
+        t_score * weights[0] +
+        o_score * weights[1] +
+        n_score * weights[2] +
+        m_score * weights[3] +
+        p_bonus * weights[4] if len(weights) > 4 else 0
+    )
+    final_score = min(max(round(final_score, 2), 0), 100)
+
+    # ── Signal classification (non-overlapping, no duplicate ranges) ──────
+    if   final_score >= 72: signal = "BUY"
+    elif final_score >= 60: signal = "WATCH"
+    elif final_score >= 45: signal = "NEUTRAL"
+    elif final_score >= 32: signal = "WATCH"    # bearish watch
+    else:                   signal = "AVOID"
+
+    # ── Option chain overrides ────────────────────────────────────────────
     if option.get("trade_permission") == "AVOID":
         signal = "AVOID"
-        all_reasons.insert(0, "Trade blocked by option-chain liquidity gate")
-    elif option.get("directional_bias") in ["BEARISH"] and final_score <= 45:
+    elif option.get("directional_bias") == "BEARISH" and final_score <= 45:
         signal = "SELL"
-        all_reasons.insert(0, "Bearish option-chain structure supports a sell-side setup")
-    elif option.get("directional_bias") == "BULLISH_BREAKOUT" and final_score >= 60:
+    elif option.get("directional_bias") == "BULLISH_BREAKOUT" and final_score >= 55:
         signal = "BUY"
-        all_reasons.insert(0, "Spot has cleared the major Call OI wall; short-covering risk supports upside")
 
-    if final_score < 40 or final_score > 80:
+    # ── Pattern override (strong reversal patterns override NEUTRAL) ──────
+    if pat.get("strong_reversal") and signal == "NEUTRAL":
+        signal = "WATCH" if pat.get("direction") == "bullish" else "WATCH"
+
+    # ── News override (high-impact negative blocks new longs) ─────────────
+    if news.get("impact") == "high" and news.get("sentiment") == "negative":
+        if signal == "BUY":
+            signal = "WATCH"
+
+    # ── Risk rating ───────────────────────────────────────────────────────
+    risk = "LOW"
+    if final_score < 40 or final_score > 85:
         risk = "MEDIUM"
-    else:
-        risk = "LOW"
-
-    if option.get("pcr") and option["pcr"] > 1.8:
+    if option.get("pcr") and float(option["pcr"] or 0) > 1.8:
         risk = "HIGH"
-        all_reasons.append("PCR is elevated, increasing trade risk")
-    if option.get("risk_flags"):
-        risk = "HIGH" if "LIQUIDITY_FAIL" in option["risk_flags"] else risk
-        all_reasons.append("Option risk flags: " + ", ".join(option["risk_flags"]))
+    if "LIQUIDITY_FAIL" in option.get("risk_flags", []):
+        risk = "HIGH"
+    if regime == "high":
+        risk = "HIGH" if risk != "HIGH" else risk
     if news.get("impact") == "high" and news.get("sentiment") == "negative":
         risk = "HIGH"
-        all_reasons.append("High-impact negative news is present")
 
-    if signal == "SELL":
-        invalid_if = "Invalidate if price closes above the Call OI resistance wall or bearish setup stop"
+    # ── Confidence adjustment ─────────────────────────────────────────────
+    confidence = final_score
+    # Boost if multiple factors agree
+    bullish_signals = sum([
+        t_score > 55,
+        o_score > 60,
+        n_score > 55,
+        pat.get("direction") == "bullish",
+        option.get("directional_bias") in ("BULLISH", "BULLISH_BREAKOUT"),
+    ])
+    if bullish_signals >= 4:
+        confidence = min(confidence + 5, 98)
+
+    # ── Collect reasons ───────────────────────────────────────────────────
+    all_reasons = []
+    all_reasons.extend(technical.get("reasons",  []))
+    all_reasons.extend(option.get("reasons",     []))
+    all_reasons.extend(news.get("reasons",        [])[:3])
+    all_reasons.extend(vol.get("reasons",         []))
+    all_reasons.extend(pat.get("reasons",         []))
+
+    # ── Invalid-if (single, signal-specific) ─────────────────────────────
+    if signal == "BUY":
+        invalid_if = f"Price closes below SL or RSI drops under 35"
+    elif signal == "SELL":
+        invalid_if = "Price closes above Call OI resistance wall"
     elif signal == "AVOID":
-        invalid_if = "No active trade recommended until option-chain gates improve"
+        invalid_if = "No trade — wait for option chain gates to open"
     else:
-        invalid_if = "Review stop-loss level and invalidate if price moves against the setup"
+        invalid_if = "Setup invalidates if any key level breaks"
+
     return {
-        "timestamp": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "symbol": symbol,
-        "signal": signal,
-        "confidence": final_score,
-        "risk": risk,
-        "reasons": all_reasons[:10],
-        "technical_score": technical["score"],
-        "option_score": option["score"],
-        "news_score": news["score"],
-        "market_score": market_score,
-        "option_strategy": option.get("strategy", "UNKNOWN"),
-        "option_bias": option.get("directional_bias", "NEUTRAL"),
+        "timestamp":           datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "symbol":              symbol,
+        "signal":              signal,
+        "confidence":          round(confidence, 1),
+        "risk":                risk,
+        "reasons":             all_reasons[:10],
+        "technical_score":     int(t_score),
+        "option_score":        int(o_score),
+        "news_score":          int(n_score),
+        "market_score":        int(m_score),
+        "volatility_regime":   regime,
+        "pattern_signal":      pat.get("strongest_pattern", ""),
+        "option_strategy":     option.get("strategy",          "UNKNOWN"),
+        "option_bias":         option.get("directional_bias",  "NEUTRAL"),
         "option_trade_permission": option.get("trade_permission", "ALLOW"),
-        "invalid_if": invalid_if
+        "invalid_if":          invalid_if,
+        "weights_used":        weights[:4],
     }

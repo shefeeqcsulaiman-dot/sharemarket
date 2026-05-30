@@ -13,6 +13,8 @@ from analysis.option_rules import option_score
 from analysis.news_ai import simple_news_score
 from analysis.signal_engine import generate_signal
 from analysis.risk_engine import calculate_trade_levels, recommend_ce_strikes
+from analysis.patterns import detect as detect_patterns
+from analysis.volatility import classify as classify_volatility
 
 app = Flask(__name__)
 NSE_TZ = ZoneInfo("Asia/Kolkata")
@@ -36,19 +38,86 @@ def _option_summary(symbol: str, name: str, spot_price: float) -> dict:
     option_df = get_option_chain(symbol, spot_price)
     option    = option_score(option_df, spot_price)
     return {
-        "symbol":           symbol,
-        "name":             name,
-        "spot":             round(spot_price, 2),
-        "pcr":              option.get("pcr"),
-        "max_pain":         option.get("max_pain"),
-        "put_oi_support":   option.get("highest_put_oi_strike"),
+        "symbol":             symbol,
+        "name":               name,
+        "spot":               round(spot_price, 2),
+        "pcr":                option.get("pcr"),
+        "max_pain":           option.get("max_pain"),
+        "put_oi_support":     option.get("highest_put_oi_strike"),
         "call_oi_resistance": option.get("highest_call_oi_strike"),
-        "score":            option.get("score"),
-        "bias":             option.get("directional_bias"),
-        "strategy":         option.get("strategy"),
-        "liquidity_pass":   option.get("liquidity", {}).get("passes"),
-        "source":           option_df.attrs.get("source", "model") if not option_df.empty else "model",
+        "score":              option.get("score"),
+        "bias":               option.get("directional_bias"),
+        "strategy":           option.get("strategy"),
+        "liquidity_pass":     option.get("liquidity", {}).get("passes"),
+        "source":             option_df.attrs.get("source", "model") if not option_df.empty else "model",
     }
+
+
+def _ai_commentary(signal: str, confidence: float, technical: dict,
+                   option: dict, vol: dict, patterns: dict,
+                   levels: dict, symbol: str) -> str:
+    """Generate a plain-English AI market summary paragraph."""
+    regime   = vol.get("regime", "normal")
+    pat      = patterns.get("strongest_pattern", "")
+    bias     = option.get("directional_bias", "NEUTRAL")
+    pcr      = option.get("pcr")
+    rsi      = round(float(technical["latest"].get("rsi", 50) or 50), 1)
+    close    = round(float(technical["latest"].get("close", 0) or 0), 2)
+    vwap     = round(float(technical["latest"].get("vwap", 0) or 0), 2)
+    ema9     = round(float(technical["latest"].get("ema_9", 0) or 0), 2)
+    t1       = levels.get("target_1")
+    sl       = levels.get("stop_loss")
+    method   = levels.get("method", "atr")
+    rr       = levels.get("risk_reward")
+
+    lines = []
+
+    # Opening — signal strength
+    if signal == "BUY":
+        lines.append(f"{symbol} is showing a strong BUY setup with {confidence}% confidence.")
+    elif signal == "WATCH":
+        lines.append(f"{symbol} is in a WATCH zone ({confidence}% confidence) — conditions are building but not confirmed yet.")
+    elif signal == "SELL":
+        lines.append(f"{symbol} is showing a SELL signal ({confidence}% confidence) driven by bearish option structure.")
+    elif signal == "AVOID":
+        lines.append(f"{symbol} signals AVOID — risk is elevated and setup quality is poor.")
+    else:
+        lines.append(f"{symbol} is NEUTRAL ({confidence}%) — no high-conviction directional edge detected.")
+
+    # Technical context
+    pos_vwap = close > vwap
+    lines.append(
+        f"Price ₹{close} is {'above' if pos_vwap else 'below'} VWAP ₹{vwap} "
+        f"and {'above' if close > ema9 else 'below'} EMA-9 ₹{ema9}. "
+        f"RSI is {rsi} ({'overbought' if rsi > 70 else 'oversold' if rsi < 30 else 'neutral-bullish' if rsi > 50 else 'bearish'})."
+    )
+
+    # Volatility regime
+    lines.append(
+        f"Market volatility is {regime}. "
+        + vol.get("recommendation", "")
+    )
+
+    # Option chain
+    if pcr:
+        pcr_text = f"PCR {pcr} indicates {'bullish put writing' if float(pcr) > 1.0 else 'bearish call writing — sellers in control'}."
+        lines.append(pcr_text)
+
+    if bias not in ("NEUTRAL", None):
+        lines.append(f"Option chain directional bias: {bias}.")
+
+    # Pattern
+    if pat:
+        dir_ = patterns.get("direction", "neutral")
+        lines.append(f"Candlestick pattern detected: {pat} — {dir_} signal.")
+
+    # Levels
+    if t1 and sl:
+        method_text = "derived from option OI walls" if method == "oi_walls" else "ATR-based"
+        rr_text = f"Risk-reward is 1:{rr}." if rr else ""
+        lines.append(f"Trade levels ({method_text}): Target ₹{t1}, Stop ₹{sl}. {rr_text}")
+
+    return " ".join(lines)
 
 
 @app.route("/")
@@ -56,7 +125,41 @@ def index():
     return render_template("index.html", symbols=list(SYMBOLS.keys()))
 
 
-# ── Fast price-tick endpoint (polls every 5 s from the frontend) ─────────────
+@app.route("/api/market-bar")
+def market_bar():
+    """Fast endpoint: Nifty, BankNifty live + US index quotes via Yahoo."""
+    import requests, urllib3
+    urllib3.disable_warnings()
+    from dotenv import load_dotenv; import os; load_dotenv()
+
+    results = {}
+
+    # Indian indices via Upstox
+    import data.upstox as _up
+    for sym in ["NIFTY", "BANKNIFTY"]:
+        q = _up.get_ltp(sym)
+        if q:
+            results[sym] = {"ltp": q["ltp"], "change": None, "source": "upstox"}
+
+    # US indices via Yahoo Finance (free, delayed)
+    us_symbols = {"DOW": "^DJI", "NASDAQ": "^IXIC", "SP500": "^GSPC"}
+    for label, yticker in us_symbols.items():
+        try:
+            url  = f"https://query1.finance.yahoo.com/v8/finance/chart/{yticker}"
+            resp = requests.get(url, params={"interval": "1d", "range": "2d"},
+                                headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+            meta = resp.json()["chart"]["result"][0]["meta"]
+            ltp  = meta.get("regularMarketPrice", 0)
+            prev = meta.get("chartPreviousClose",  ltp)
+            pct  = round((ltp - prev) / prev * 100, 2) if prev else 0
+            results[label] = {"ltp": round(ltp, 2), "change": f"{pct:+.2f}%",
+                               "up": pct >= 0, "source": "yahoo"}
+        except Exception:
+            results[label] = {"ltp": None, "change": None, "source": "error"}
+
+    return jsonify(results)
+
+
 @app.route("/api/quote/<symbol>")
 def quick_quote(symbol: str):
     symbol = symbol.upper()
@@ -67,7 +170,7 @@ def quick_quote(symbol: str):
         "symbol":      symbol,
         "ltp":         q.get("ltp", 0),
         "change_text": q.get("change_text", "—"),
-        "change_pct":  q.get("change_pct", 0),
+        "change_pct":  q.get("change_pct",  0),
         "volume":      q.get("volume", 0),
         "source":      q.get("source", "unknown"),
         "session":     q.get("session", "unknown"),
@@ -75,12 +178,11 @@ def quick_quote(symbol: str):
     })
 
 
-# ── Full signal endpoint ─────────────────────────────────────────────────────
 @app.route("/api/signal", methods=["POST"])
 def get_signal():
-    body      = request.get_json(silent=True) or {}
-    symbol    = body.get("symbol", "VEDL")
-    timeframe = body.get("timeframe", "15m")
+    body         = request.get_json(silent=True) or {}
+    symbol       = body.get("symbol", "VEDL")
+    timeframe    = body.get("timeframe", "15m")
     market_score = body.get("market_score", DEFAULT_MARKET_SCORE)
 
     if symbol not in SYMBOLS:
@@ -90,7 +192,7 @@ def get_signal():
     try:
         market_score = min(max(int(market_score), 0), 100)
     except (TypeError, ValueError):
-        return jsonify({"error": "Invalid market score"}), 400
+        market_score = DEFAULT_MARKET_SCORE
 
     company_name    = SYMBOLS[symbol]["name"]
     sector          = SYMBOLS[symbol]["sector"]
@@ -114,6 +216,34 @@ def get_signal():
     option_df    = get_option_chain(symbol, spot_price)
     option       = option_score(option_df, spot_price)
     option_source = option_df.attrs.get("source", "model") if not option_df.empty else "model"
+    option_expiry = option_df.attrs.get("expiry", "") if not option_df.empty else ""
+
+    # New AI modules
+    atm_iv    = option.get("iv", {}).get("atm_iv")
+    vol_data  = classify_volatility(analysis_df, atm_iv)
+    pat_data  = detect_patterns(analysis_df)
+
+    news_items  = fetch_google_news(company_name)
+    news        = simple_news_score(news_items)
+
+    signal = generate_signal(
+        symbol=symbol,
+        technical=technical,
+        option=option,
+        news=news,
+        market_score=market_score,
+        volatility=vol_data,
+        patterns=pat_data,
+    )
+
+    levels  = calculate_trade_levels(signal["signal"], technical["latest"], option_df)
+    ce_list = recommend_ce_strikes(signal["signal"], spot_price, option_df)
+
+    # AI commentary
+    commentary = _ai_commentary(
+        signal["signal"], signal["confidence"], technical,
+        option, vol_data, pat_data, levels, symbol,
+    )
 
     related_options = []
     for rsym in related_symbols:
@@ -122,19 +252,6 @@ def get_signal():
         related_options.append(
             _option_summary(rsym, rinfo.get("name", rsym), float(rquote.get("ltp", 0) or 0))
         )
-
-    news_items = fetch_google_news(company_name)
-    news       = simple_news_score(news_items)
-
-    signal = generate_signal(
-        symbol=symbol,
-        technical=technical,
-        option=option,
-        news=news,
-        market_score=market_score,
-    )
-    levels = calculate_trade_levels(signal["signal"], technical["latest"], option_df)
-    ce_list = recommend_ce_strikes(signal["signal"], spot_price, option_df)
 
     return jsonify({
         "symbol":       symbol,
@@ -145,7 +262,7 @@ def get_signal():
             "change":         quote.get("change_text", "N/A"),
             "change_pct":     quote.get("change_pct", 0),
             "volume":         quote.get("volume", 0),
-            "vwap_deviation": round(spot_price - technical["latest"].get("vwap", spot_price), 2),
+            "vwap_deviation": round(spot_price - float(technical["latest"].get("vwap", spot_price) or spot_price), 2),
             "timestamp":      _iso(quote.get("timestamp")),
             "source":         quote_source,
             "session":        quote.get("session", "unknown"),
@@ -160,13 +277,16 @@ def get_signal():
             "age_minutes":   _age_minutes(quote.get("timestamp")),
         },
         "signal": {
-            "status":               signal["signal"],
-            "confidence":           signal["confidence"],
-            "risk":                 signal["risk"],
-            "option_strategy":      signal.get("option_strategy", "UNKNOWN"),
-            "option_bias":          signal.get("option_bias", "NEUTRAL"),
-            "option_trade_permission": signal.get("option_trade_permission", "ALLOW"),
-            "invalid_if":           signal.get("invalid_if", "N/A"),
+            "status":                 signal["signal"],
+            "confidence":             signal["confidence"],
+            "risk":                   signal["risk"],
+            "option_strategy":        signal.get("option_strategy",  "UNKNOWN"),
+            "option_bias":            signal.get("option_bias",       "NEUTRAL"),
+            "option_trade_permission":signal.get("option_trade_permission", "ALLOW"),
+            "invalid_if":             signal.get("invalid_if", ""),
+            "volatility_regime":      signal.get("volatility_regime", "normal"),
+            "pattern_signal":         signal.get("pattern_signal", ""),
+            "weights_used":           signal.get("weights_used", []),
         },
         "levels": {
             "entry":         levels["entry"],
@@ -179,7 +299,6 @@ def get_signal():
             "oi_support":    levels.get("oi_support"),
             "oi_resistance": levels.get("oi_resistance"),
         },
-        "ce_list": ce_list,
         "scores": {
             "technical": signal["technical_score"],
             "options":   signal["option_score"],
@@ -187,34 +306,54 @@ def get_signal():
             "market":    signal["market_score"],
         },
         "technicals": {
-            "rsi":        round(technical["latest"].get("rsi",    0), 2),
-            "ema_9":      round(technical["latest"].get("ema_9",  0), 2),
-            "ema_20":     round(technical["latest"].get("ema_20", 0), 2),
-            "macd":       round(technical["latest"].get("macd",   0), 2),
-            "atr":        round(technical["latest"].get("atr",    0), 2),
-            "last_close": round(technical["latest"].get("close",  0), 2),
-            "last_volume":int(technical["latest"].get("volume",   0) or 0),
+            "rsi":        round(float(technical["latest"].get("rsi",    0) or 0), 2),
+            "ema_9":      round(float(technical["latest"].get("ema_9",  0) or 0), 2),
+            "ema_20":     round(float(technical["latest"].get("ema_20", 0) or 0), 2),
+            "macd":       round(float(technical["latest"].get("macd",   0) or 0), 2),
+            "atr":        round(float(technical["latest"].get("atr",    0) or 0), 2),
+            "last_close": round(float(technical["latest"].get("close",  0) or 0), 2),
+            "last_volume":int(float(technical["latest"].get("volume",   0) or 0)),
+            "bb_upper":   round(float(technical["latest"].get("bb_upper", 0) or 0), 2),
+            "bb_lower":   round(float(technical["latest"].get("bb_lower", 0) or 0), 2),
+            "roc_5":      round(float(technical["latest"].get("roc_5",  0) or 0), 2),
+        },
+        "volatility": {
+            "regime":         vol_data.get("regime",         "normal"),
+            "atr_pct":        vol_data.get("atr_pct",        0),
+            "hv20":           vol_data.get("hv20",           0),
+            "percentile":     vol_data.get("percentile",     50),
+            "recommendation": vol_data.get("recommendation", ""),
+        },
+        "patterns": {
+            "found":            pat_data.get("patterns",          []),
+            "strongest":        pat_data.get("strongest_pattern", ""),
+            "direction":        pat_data.get("direction",         "neutral"),
+            "score_bonus":      pat_data.get("score_bonus",       0),
+            "strong_reversal":  pat_data.get("strong_reversal",   False),
         },
         "options": {
-            "pcr":               option.get("pcr", "N/A"),
-            "max_pain":          option.get("max_pain", "N/A"),
+            "pcr":               option.get("pcr",                  "N/A"),
+            "max_pain":          option.get("max_pain",              "N/A"),
             "put_oi_support":    option.get("highest_put_oi_strike", "N/A"),
-            "call_oi_resistance":option.get("highest_call_oi_strike", "N/A"),
-            "directional_bias":  option.get("directional_bias", "NEUTRAL"),
-            "trade_permission":  option.get("trade_permission", "ALLOW"),
-            "strategy":          option.get("strategy", "UNKNOWN"),
-            "liquidity":         option.get("liquidity", {}),
-            "iv":                option.get("iv", {}),
-            "risk_flags":        option.get("risk_flags", []),
+            "call_oi_resistance":option.get("highest_call_oi_strike","N/A"),
+            "directional_bias":  option.get("directional_bias",      "NEUTRAL"),
+            "trade_permission":  option.get("trade_permission",       "ALLOW"),
+            "strategy":          option.get("strategy",               "UNKNOWN"),
+            "liquidity":         option.get("liquidity",              {}),
+            "iv":                option.get("iv",                     {}),
+            "risk_flags":        option.get("risk_flags",             []),
             "source":            option_source,
+            "expiry":            option_expiry,
         },
         "related_options": related_options,
-        "reasons":  signal["reasons"][:8],
+        "reasons":         signal["reasons"][:8],
         "news": {
             "sentiment": news.get("sentiment", "neutral"),
-            "impact":    news.get("impact", "low"),
-            "items":     news.get("items", [])[:4],
+            "impact":    news.get("impact",    "low"),
+            "items":     news.get("items",     [])[:4],
         },
+        "commentary":  commentary,
+        "ce_list":     ce_list,
         "chart": {
             "timestamps": [_iso(ts) for ts in analysis_df["timestamp"].tail(60).tolist()],
             "opens":      analysis_df["open"].tail(60).round(2).tolist(),
@@ -225,6 +364,9 @@ def get_signal():
             "ema_9":      analysis_df["ema_9"].tail(60).round(2).tolist(),
             "ema_20":     analysis_df["ema_20"].tail(60).round(2).tolist(),
             "vwap":       analysis_df["vwap"].tail(60).round(2).tolist(),
+            "rsi":        analysis_df["rsi"].tail(60).round(2).tolist(),
+            "bb_upper":   analysis_df["bb_upper"].tail(60).round(2).tolist(),
+            "bb_lower":   analysis_df["bb_lower"].tail(60).round(2).tolist(),
         },
     })
 
