@@ -1,0 +1,13 @@
+flask
+flask-cors
+pandas
+numpy
+requests
+python-dotenv
+plotly
+scikit-learn
+ta
+sqlalchemy
+beautifulsoup4
+feedparser
+joblib

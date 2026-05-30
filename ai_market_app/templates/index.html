@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AlphaEngine — AI Stock Signal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+        * { box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background: #080c14; color: #e5e7eb; margin: 0; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+
+        .glass { background: rgba(15, 23, 42, 0.75); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.06); }
+        .card  { background: #0f172a; border: 1px solid #1e293b; border-radius: 16px; }
+
+        .signal-BUY     { background: linear-gradient(135deg,rgba(16,185,129,.14),rgba(5,150,105,.04)); border: 1px solid rgba(16,185,129,.35); }
+        .signal-WATCH   { background: linear-gradient(135deg,rgba(245,158,11,.14),rgba(217,119,6,.04)); border: 1px solid rgba(245,158,11,.35); }
+        .signal-NEUTRAL { background: linear-gradient(135deg,rgba(99,102,241,.14),rgba(67,56,202,.04)); border: 1px solid rgba(99,102,241,.35); }
+        .signal-AVOID   { background: linear-gradient(135deg,rgba(239,68,68,.14),rgba(185,28,28,.04)); border: 1px solid rgba(239,68,68,.35); }
+        .signal-SELL    { background: linear-gradient(135deg,rgba(244,63,94,.14),rgba(127,29,29,.04)); border: 1px solid rgba(244,63,94,.35); }
+
+        .text-BUY     { color: #10b981; }
+        .text-WATCH   { color: #f59e0b; }
+        .text-NEUTRAL { color: #818cf8; }
+        .text-AVOID   { color: #ef4444; }
+        .text-SELL    { color: #f43f5e; }
+
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: #080c14; }
+        ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+
+        .skeleton { background: linear-gradient(90deg, #1e293b 25%, #243048 50%, #1e293b 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 6px; }
+        @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+
+        .loading-overlay { pointer-events: none; }
+        .loading-overlay .card, .loading-overlay .glass { opacity: 0.55; transition: opacity .25s; }
+
+        .pulse-dot { animation: pulse-dot 2s cubic-bezier(0.4,0,0.6,1) infinite; }
+        @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.4} }
+        @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+
+        /* confidence ring */
+        .ring-track { fill: none; stroke: #1e293b; stroke-width: 3; }
+        .ring-fill  { fill: none; stroke-width: 3; stroke-linecap: round; transition: stroke-dasharray .6s ease; transform-origin: center; transform: rotate(-90deg); }
+
+        /* RSI gauge bar */
+        .rsi-bar-bg { background: linear-gradient(to right, #ef4444 0%, #f59e0b 30%, #22c55e 50%, #f59e0b 70%, #ef4444 100%); border-radius: 4px; }
+
+        /* tab */
+        .tab-btn { padding: 6px 14px; border-radius: 8px; font-size: 0.75rem; font-weight: 600; color: #6b7280; cursor: pointer; transition: all .15s; }
+        .tab-btn.active { background: #1e293b; color: #e5e7eb; }
+
+        #chartContainer, #rsiContainer { width: 100%; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+<!-- ─── HEADER ─── -->
+<header class="glass sticky top-0 z-50 border-b border-white/5 px-5 py-3 flex items-center justify-between gap-3">
+    <div class="flex items-center gap-3">
+        <div class="bg-indigo-600 p-1.5 rounded-lg">
+            <i data-lucide="cpu" class="w-5 h-5 text-white"></i>
+        </div>
+        <div>
+            <h1 class="text-sm font-bold tracking-tight leading-tight">AlphaEngine
+                <span class="text-[10px] font-mono text-indigo-400 px-1.5 py-0.5 rounded bg-indigo-950/60 border border-indigo-800/50 ml-1.5">v1.0</span>
+            </h1>
+            <p class="text-[11px] text-gray-500">Quantitative AI Signal Dashboard</p>
+        </div>
+    </div>
+    <div class="flex items-center gap-4 text-xs">
+        <div class="flex items-center gap-2">
+            <span id="dataStatusDot" class="w-2 h-2 rounded-full bg-amber-500 pulse-dot"></span>
+            <span id="dataStatusLabel" class="font-mono text-gray-400 text-[11px]">CHECKING…</span>
+        </div>
+        <div id="lastRefresh" class="text-gray-500 font-mono text-[11px] hidden md:block">—</div>
+        <div class="flex items-center gap-1.5 bg-gray-900 border border-gray-800 rounded-lg px-3 py-1.5 text-[11px] font-mono text-gray-400 hidden md:flex">
+            <i data-lucide="clock" class="w-3 h-3 text-indigo-400"></i>
+            Next in <span id="countdown" class="text-indigo-400 font-bold">30</span>s
+        </div>
+        <button id="refreshBtn" title="Refresh (R)" class="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5" id="refreshIcon"></i>Refresh
+        </button>
+    </div>
+</header>
+
+<!-- ─── LAYOUT ─── -->
+<div class="flex flex-1 overflow-hidden">
+
+    <!-- SIDEBAR -->
+    <aside class="w-72 shrink-0 border-r border-white/5 bg-[#0b1120] p-5 flex flex-col gap-5 overflow-y-auto">
+
+        <!-- Symbol grid -->
+        <div>
+            <p class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest mb-2.5">Select Asset</p>
+            <div class="grid grid-cols-2 gap-2" id="symbolButtons"></div>
+        </div>
+
+        <!-- Timeframe -->
+        <div>
+            <p class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest mb-2">Timeframe</p>
+            <div class="flex gap-1.5">
+                <button class="tab-btn active" data-tf="5m">5m</button>
+                <button class="tab-btn" data-tf="15m">15m</button>
+                <button class="tab-btn" data-tf="1h">1h</button>
+            </div>
+        </div>
+
+        <!-- Market sentiment slider -->
+        <div>
+            <div class="flex justify-between items-center mb-2">
+                <p class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest">Market Mood</p>
+                <span id="marketScoreValue" class="text-xs font-mono text-indigo-400 font-bold">50</span>
+            </div>
+            <input type="range" id="marketScore" min="0" max="100" value="50"
+                   class="w-full accent-indigo-500">
+            <div class="flex justify-between text-[10px] text-gray-600 mt-1 font-mono">
+                <span>BEAR</span><span>NEUTRAL</span><span>BULL</span>
+            </div>
+        </div>
+
+        <!-- Auto refresh — ON by default -->
+        <label class="flex items-center justify-between text-xs text-gray-400 bg-white/[.03] border border-white/[.06] rounded-xl px-3 py-2.5 cursor-pointer">
+            <span class="flex items-center gap-2"><i data-lucide="timer" class="w-3.5 h-3.5 text-indigo-400"></i>Auto-refresh 30s</span>
+            <input type="checkbox" id="autoRefreshToggle" class="accent-indigo-500" checked>
+        </label>
+
+        <!-- Technicals mini-panel -->
+        <div class="card p-4 space-y-3">
+            <p class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest">Technicals</p>
+            <!-- RSI gauge -->
+            <div>
+                <div class="flex justify-between text-[11px] font-mono mb-1.5">
+                    <span class="text-gray-500">RSI (14)</span>
+                    <span id="rsiLabel" class="font-bold text-gray-300">—</span>
+                </div>
+                <div class="rsi-bar-bg h-2 w-full relative">
+                    <div id="rsiMarker" class="absolute top-1/2 -translate-y-1/2 w-2 h-4 rounded-sm bg-white shadow" style="left:50%"></div>
+                </div>
+                <div class="flex justify-between text-[10px] text-gray-600 mt-1 font-mono">
+                    <span>0</span><span>30</span><span>50</span><span>70</span><span>100</span>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2 text-xs">
+                <div class="bg-white/[.03] rounded-lg p-2.5">
+                    <span class="text-gray-500 block text-[10px] font-mono">EMA 9</span>
+                    <span id="ema9Label" class="font-bold font-mono text-orange-400">—</span>
+                </div>
+                <div class="bg-white/[.03] rounded-lg p-2.5">
+                    <span class="text-gray-500 block text-[10px] font-mono">EMA 20</span>
+                    <span id="ema20Label" class="font-bold font-mono text-blue-400">—</span>
+                </div>
+                <div class="bg-white/[.03] rounded-lg p-2.5">
+                    <span class="text-gray-500 block text-[10px] font-mono">MACD</span>
+                    <span id="macdLabel" class="font-bold font-mono text-purple-400">—</span>
+                </div>
+                <div class="bg-white/[.03] rounded-lg p-2.5">
+                    <span class="text-gray-500 block text-[10px] font-mono">ATR</span>
+                    <span id="atrLabel" class="font-bold font-mono text-cyan-400">—</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Risk notice -->
+        <div class="mt-auto bg-amber-950/20 border border-amber-900/30 rounded-xl p-3 text-[11px] text-amber-400/80 space-y-1">
+            <div class="flex items-center gap-1.5 font-bold text-amber-400 text-xs">
+                <i data-lucide="shield-alert" class="w-3.5 h-3.5"></i>Risk Protocol
+            </div>
+            <p class="text-amber-400/60">Avoid trading 9:15–9:30 IST. Let OI clusters form before parsing signals.</p>
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="flex-1 overflow-y-auto p-5 space-y-4" id="mainContent">
+
+        <!-- Error banner -->
+        <div id="errorBanner" class="hidden rounded-xl border border-red-900/50 bg-red-950/25 px-4 py-3 text-sm text-red-300 flex items-center gap-2">
+            <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0"></i>
+            <span id="errorText"></span>
+        </div>
+
+        <!-- Company + LTP bar -->
+        <div class="card px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+                <div class="flex items-center gap-2">
+                    <h2 id="companyName" class="text-xl font-bold tracking-tight">Loading…</h2>
+                    <span id="symbolTag" class="text-[11px] font-mono bg-white/[.06] text-gray-400 px-2 py-0.5 rounded">NSE: —</span>
+                </div>
+                <p id="sectorText" class="text-xs text-gray-500 mt-0.5">—</p>
+            </div>
+            <div class="flex items-center gap-6">
+                <div class="text-right">
+                    <span class="text-[10px] text-gray-500 block font-mono">LAST PRICE</span>
+                    <div class="flex items-baseline gap-2">
+                        <span id="ltpValue" class="text-2xl font-mono font-bold text-emerald-400">₹—</span>
+                        <span id="changeValue" class="text-xs font-mono font-semibold">—</span>
+                    </div>
+                </div>
+                <div class="text-right">
+                    <span class="text-[10px] text-gray-500 block font-mono">VWAP DEV</span>
+                    <span id="vwapValue" class="text-lg font-mono font-bold text-indigo-400">₹—</span>
+                </div>
+                <div class="text-right">
+                    <span class="text-[10px] text-gray-500 block font-mono">VOLUME</span>
+                    <span id="volumeValue" class="text-lg font-mono font-bold text-gray-300">—</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Data meta strip -->
+        <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            <div class="card px-3 py-2"><span class="text-[10px] text-gray-500 font-mono block">QUOTE SRC</span><strong id="sourceValue" class="text-xs text-gray-200">—</strong></div>
+            <div class="card px-3 py-2"><span class="text-[10px] text-gray-500 font-mono block">SESSION</span><strong id="sessionValue" class="text-xs text-gray-200">—</strong></div>
+            <div class="card px-3 py-2"><span class="text-[10px] text-gray-500 font-mono block">DATA AGE</span><strong id="ageValue" class="text-xs text-gray-200">—</strong></div>
+            <div class="card px-3 py-2"><span class="text-[10px] text-gray-500 font-mono block">LAST CANDLE</span><strong id="latestCandleValue" class="text-xs text-gray-200">—</strong></div>
+            <div class="card px-3 py-2"><span class="text-[10px] text-gray-500 font-mono block">OPTION SRC</span><strong id="optionSourceMeta" class="text-xs text-gray-200">—</strong></div>
+        </div>
+
+        <!-- Signal + Levels + Scores row -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+            <!-- Signal card -->
+            <div id="signalCard" class="signal-BUY rounded-2xl p-5 flex flex-col gap-4 relative overflow-hidden">
+                <div class="absolute right-0 top-0 translate-x-6 -translate-y-6 pointer-events-none opacity-5">
+                    <i data-lucide="trending-up" class="w-52 h-52" id="signalBgIcon"></i>
+                </div>
+                <div class="flex items-start justify-between">
+                    <div>
+                        <span id="signalBadge" class="text-[10px] font-bold tracking-widest uppercase px-2 py-0.5 rounded-full border text-emerald-400 bg-emerald-950/60 border-emerald-800/50">AI SIGNAL</span>
+                        <div id="signalText" class="text-5xl font-extrabold tracking-tighter mt-2 text-BUY">—</div>
+                    </div>
+                    <!-- Confidence ring -->
+                    <div class="flex flex-col items-center shrink-0">
+                        <svg viewBox="0 0 36 36" class="w-20 h-20">
+                            <circle class="ring-track" cx="18" cy="18" r="15.9" />
+                            <circle id="ringFill" class="ring-fill" cx="18" cy="18" r="15.9"
+                                    stroke="#10b981" stroke-dasharray="0,100" />
+                        </svg>
+                        <span id="confidenceValue" class="text-lg font-bold font-mono -mt-14 text-emerald-400">—%</span>
+                        <span class="text-[10px] text-gray-500 mt-6 uppercase tracking-wider">Confidence</span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-3 pt-3 border-t border-white/10">
+                    <div>
+                        <span class="text-[10px] text-gray-400 uppercase tracking-wider block">Risk</span>
+                        <span id="riskValue" class="text-base font-bold font-mono text-amber-400">—</span>
+                    </div>
+                    <div>
+                        <span class="text-[10px] text-gray-400 uppercase tracking-wider block">Strategy</span>
+                        <span id="strategyValue" class="text-base font-bold font-mono text-indigo-400">—</span>
+                    </div>
+                </div>
+                <p id="invalidIfText" class="text-[11px] text-gray-500 bg-black/20 rounded-lg px-2 py-1.5">—</p>
+            </div>
+
+            <!-- Trade levels -->
+            <div class="card p-5 flex flex-col gap-3">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
+                        <i data-lucide="crosshair" class="w-3.5 h-3.5 text-indigo-400"></i>Trade Levels
+                    </h3>
+                    <div class="flex items-center gap-2 text-[10px] font-mono">
+                        <span id="levelsMethodBadge" class="px-2 py-0.5 rounded-full bg-indigo-950/60 text-indigo-400 border border-indigo-800/40">—</span>
+                        <span class="text-gray-600">RR:</span>
+                        <span id="rrValue" class="text-emerald-400 font-bold">—</span>
+                    </div>
+                </div>
+                <div class="flex-1 space-y-2">
+                    <div class="flex justify-between items-center bg-indigo-950/30 border border-indigo-900/30 rounded-xl px-3 py-2.5">
+                        <span class="text-xs text-indigo-300">Entry Zone</span>
+                        <span id="entryLevel" class="font-mono text-sm font-bold text-indigo-400">—</span>
+                    </div>
+                    <div class="flex justify-between items-center bg-emerald-950/20 border border-emerald-900/25 rounded-xl px-3 py-2.5">
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-xs text-emerald-400">Target 1</span>
+                            <span id="oiResistanceBadge" class="text-[9px] font-mono text-amber-500 hidden">Call OI Wall</span>
+                        </div>
+                        <span id="target1Level" class="font-mono text-sm font-bold text-emerald-400">—</span>
+                    </div>
+                    <div class="flex justify-between items-center bg-emerald-950/20 border border-emerald-900/25 rounded-xl px-3 py-2.5">
+                        <span class="text-xs text-emerald-300">Target 2</span>
+                        <span id="target2Level" class="font-mono text-sm font-bold text-emerald-300">—</span>
+                    </div>
+                    <div class="flex justify-between items-center bg-red-950/25 border border-red-900/25 rounded-xl px-3 py-2.5">
+                        <div class="flex items-center gap-1.5">
+                            <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                            <span class="text-xs text-red-400">Stop Loss</span>
+                            <span id="oiSupportBadge" class="text-[9px] font-mono text-amber-500 hidden">Put OI Wall</span>
+                        </div>
+                        <span id="slLevel" class="font-mono text-sm font-bold text-red-400">—</span>
+                    </div>
+                </div>
+                <!-- OI S/R reference -->
+                <div class="pt-2 border-t border-white/5 grid grid-cols-2 gap-2 text-[11px] font-mono">
+                    <div class="bg-emerald-950/20 rounded-lg px-2 py-1.5">
+                        <span class="text-gray-600 block text-[10px]">PUT OI SUPPORT</span>
+                        <span id="oiSupportRef" class="text-emerald-400 font-bold">—</span>
+                    </div>
+                    <div class="bg-red-950/20 rounded-lg px-2 py-1.5">
+                        <span class="text-gray-600 block text-[10px]">CALL OI RESIST</span>
+                        <span id="oiResistRef" class="text-red-400 font-bold">—</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Engine scores -->
+            <div class="card p-5">
+                <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5 mb-4">
+                    <i data-lucide="layers" class="w-3.5 h-3.5 text-indigo-400"></i>Engine Scores
+                </h3>
+                <div class="space-y-4">
+                    <div>
+                        <div class="flex justify-between text-xs font-mono mb-1.5">
+                            <span class="text-gray-400">Technical (40%)</span>
+                            <span id="scoreT" class="font-bold text-emerald-400">—</span>
+                        </div>
+                        <div class="h-1.5 bg-gray-900 rounded-full overflow-hidden">
+                            <div id="barT" class="h-full rounded-full bg-gradient-to-r from-emerald-600 to-emerald-400 transition-all duration-500" style="width:0%"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-xs font-mono mb-1.5">
+                            <span class="text-gray-400">Options (30%)</span>
+                            <span id="scoreO" class="font-bold text-blue-400">—</span>
+                        </div>
+                        <div class="h-1.5 bg-gray-900 rounded-full overflow-hidden">
+                            <div id="barO" class="h-full rounded-full bg-gradient-to-r from-blue-600 to-blue-400 transition-all duration-500" style="width:0%"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-xs font-mono mb-1.5">
+                            <span class="text-gray-400">News (20%)</span>
+                            <span id="scoreN" class="font-bold text-amber-400">—</span>
+                        </div>
+                        <div class="h-1.5 bg-gray-900 rounded-full overflow-hidden">
+                            <div id="barN" class="h-full rounded-full bg-gradient-to-r from-amber-600 to-amber-400 transition-all duration-500" style="width:0%"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-xs font-mono mb-1.5">
+                            <span class="text-gray-400">Market Macro (10%)</span>
+                            <span id="scoreM" class="font-bold text-gray-400">—</span>
+                        </div>
+                        <div class="h-1.5 bg-gray-900 rounded-full overflow-hidden">
+                            <div id="barM" class="h-full rounded-full bg-gradient-to-r from-gray-600 to-gray-400 transition-all duration-500" style="width:0%"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Option bias pills -->
+                <div class="mt-4 pt-4 border-t border-white/5 flex flex-wrap gap-2 text-[11px] font-mono">
+                    <span class="bg-white/[.04] border border-white/[.07] rounded-full px-2.5 py-1 text-gray-400">
+                        Bias: <strong id="optionBiasChip" class="text-indigo-400">—</strong>
+                    </span>
+                    <span class="bg-white/[.04] border border-white/[.07] rounded-full px-2.5 py-1 text-gray-400">
+                        PCR: <strong id="pcrChip" class="text-emerald-400">—</strong>
+                    </span>
+                    <span class="bg-white/[.04] border border-white/[.07] rounded-full px-2.5 py-1 text-gray-400">
+                        Pain: <strong id="maxPainChip" class="text-amber-400">—</strong>
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── CHART SECTION ── -->
+        <div class="card p-5">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
+                    <i data-lucide="candlestick-chart" class="w-3.5 h-3.5 text-indigo-400"></i>Price Action — Candlestick
+                </h3>
+                <div class="flex gap-3 text-[11px] font-mono text-gray-500">
+                    <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-orange-400 inline-block"></span>EMA 9</span>
+                    <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-blue-400 inline-block"></span>EMA 20</span>
+                    <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-purple-400 inline-block" style="border-top: 2px dashed #a78bfa; height:0"></span>VWAP</span>
+                </div>
+            </div>
+            <div id="chartContainer" style="height:300px;"></div>
+
+            <!-- RSI chart -->
+            <div class="mt-3 border-t border-white/5 pt-3">
+                <p class="text-[10px] font-mono text-gray-600 mb-1.5">RSI (14) — Overbought >70 · Oversold &lt;30</p>
+                <div id="rsiContainer" style="height:80px;"></div>
+            </div>
+        </div>
+
+        <!-- AI Reasons -->
+        <div class="card p-5">
+            <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5 mb-3">
+                <i data-lucide="brain-circuit" class="w-3.5 h-3.5 text-indigo-400"></i>Signal Rationale
+            </h3>
+            <div id="reasonsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-2"></div>
+        </div>
+
+        <!-- CE Options List -->
+        <div class="card p-5">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
+                    <i data-lucide="list-ordered" class="w-3.5 h-3.5 text-indigo-400"></i>
+                    Available CE Options — Call Strikes
+                </h3>
+                <div class="flex items-center gap-2 text-[11px] font-mono text-gray-500">
+                    <span>Expiry: <strong id="ceExpiry" class="text-indigo-400">—</strong></span>
+                    <span>Spot: <strong id="ceSpot" class="text-gray-300">—</strong></span>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-xs">
+                    <thead class="border-b border-white/5">
+                        <tr class="text-gray-500 text-[10px] font-mono">
+                            <th class="py-2 text-left font-medium">Strike</th>
+                            <th class="py-2 text-left font-medium">Type</th>
+                            <th class="py-2 text-right font-medium">LTP</th>
+                            <th class="py-2 text-right font-medium">Bid/Ask</th>
+                            <th class="py-2 text-right font-medium">OI</th>
+                            <th class="py-2 text-right font-medium">ΔOI</th>
+                            <th class="py-2 text-right font-medium">Volume</th>
+                            <th class="py-2 text-right font-medium">IV%</th>
+                            <th class="py-2 text-right font-medium">Spread%</th>
+                            <th class="py-2 text-left font-medium">Signal</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ceTableBody" class="divide-y divide-white/[.03] text-gray-300">
+                        <tr><td colspan="10" class="py-3 text-gray-600">Loading CE options…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Options + News -->
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+
+            <!-- Options chain summary -->
+            <div class="card p-5">
+                <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5 mb-3">
+                    <i data-lucide="binary" class="w-3.5 h-3.5 text-indigo-400"></i>Options Chain Summary
+                </h3>
+                <!-- OI support / resistance bar -->
+                <div class="mb-3">
+                    <div class="flex justify-between text-[10px] font-mono text-gray-500 mb-1">
+                        <span class="text-emerald-400">PUT OI: <strong id="putOiBar" class="text-emerald-300">—</strong></span>
+                        <span class="text-red-400">CALL OI: <strong id="callOiBar" class="text-red-300">—</strong></span>
+                    </div>
+                    <div class="h-2 bg-gray-900 rounded-full overflow-hidden flex">
+                        <div id="putOiBarFill" class="h-full bg-emerald-500/60 transition-all duration-500" style="width:50%"></div>
+                        <div id="callOiBarFill" class="h-full bg-red-500/60 transition-all duration-500" style="width:50%"></div>
+                    </div>
+                </div>
+                <div class="space-y-1.5 text-xs text-gray-400 mb-3">
+                    <p><span class="text-gray-500">Liquidity:</span> <span id="liquidityValue" class="font-mono text-amber-400">—</span></p>
+                    <p><span class="text-gray-500">IV/Strategy:</span> <span id="ivValue" class="font-mono text-indigo-300">—</span></p>
+                    <p><span class="text-gray-500">Trade Permission:</span> <span id="tradePermValue" class="font-mono text-gray-200">—</span></p>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-xs">
+                        <thead class="border-b border-white/5 text-gray-500">
+                            <tr>
+                                <th class="py-2 text-left font-medium">Symbol</th>
+                                <th class="py-2 text-right font-medium">Spot</th>
+                                <th class="py-2 text-right font-medium">PCR</th>
+                                <th class="py-2 text-right font-medium">Support</th>
+                                <th class="py-2 text-right font-medium">Resist.</th>
+                                <th class="py-2 text-right font-medium">Bias</th>
+                            </tr>
+                        </thead>
+                        <tbody id="relatedOptionsRows" class="divide-y divide-white/[.04] text-gray-300">
+                            <tr><td colspan="6" class="py-3 text-gray-600">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- News -->
+            <div class="card p-5 flex flex-col">
+                <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5 mb-3">
+                    <i data-lucide="newspaper" class="w-3.5 h-3.5 text-indigo-400"></i>News Intelligence
+                </h3>
+                <div class="flex items-center gap-2 mb-3">
+                    <span class="text-xs text-gray-500">Sentiment:</span>
+                    <span id="newsSentimentBadge" class="text-[11px] font-mono font-bold px-2 py-0.5 rounded-full bg-gray-800 text-gray-400">—</span>
+                    <span class="text-xs text-gray-500">Impact:</span>
+                    <span id="newsImpactBadge" class="text-[11px] font-mono font-bold px-2 py-0.5 rounded-full bg-gray-800 text-gray-400">—</span>
+                </div>
+                <div id="newsContainer" class="space-y-2 overflow-y-auto flex-1 max-h-56 pr-1"></div>
+            </div>
+        </div>
+
+    </main>
+</div>
+
+<!-- FOOTER -->
+<footer class="glass border-t border-white/5 px-5 py-2.5 flex items-center justify-between text-[11px] text-gray-600">
+    <span class="flex items-center gap-1.5"><i data-lucide="info" class="w-3 h-3"></i>Personal use only. All signals are heuristic estimates. Trade at your own risk.</span>
+    <span id="footerDataMode" class="font-mono hidden sm:block">—</span>
+</footer>
+
+<script>
+    lucide.createIcons();
+
+    // ── State ──────────────────────────────────────────────────────────────
+    const symbols = {{ symbols | tojson }};
+    let currentSymbol = symbols[0] || 'VEDL';
+    let currentTf = '5m';
+    let fullRefreshId  = null;   // 30 s full-signal refresh
+    let tickId         = null;   // 5 s fast price tick
+    let countdownId    = null;   // 1 s countdown display
+    let countdownVal   = 30;
+    let symbolPrices   = {};
+
+    // ── Charts ─────────────────────────────────────────────────────────────
+    const chartOptions = {
+        layout: { background: { color: '#0f172a' }, textColor: '#6b7280' },
+        grid: { vertLines: { color: 'rgba(255,255,255,0.04)' }, horzLines: { color: 'rgba(255,255,255,0.04)' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: '#1e293b' },
+        timeScale: { borderColor: '#1e293b', timeVisible: true, secondsVisible: false },
+        handleScroll: true,
+        handleScale: true,
+    };
+
+    const mainChart = LightweightCharts.createChart(document.getElementById('chartContainer'), {
+        ...chartOptions, height: 300,
+    });
+    const rsiChart = LightweightCharts.createChart(document.getElementById('rsiContainer'), {
+        ...chartOptions,
+        height: 80,
+        rightPriceScale: { borderColor: '#1e293b', scaleMargins: { top: 0.1, bottom: 0.1 } },
+        timeScale: { borderColor: '#1e293b', timeVisible: true, secondsVisible: false, visible: false },
+    });
+
+    const candleSeries = mainChart.addCandlestickSeries({
+        upColor: '#22c55e', downColor: '#ef4444',
+        borderUpColor: '#22c55e', borderDownColor: '#ef4444',
+        wickUpColor: '#22c55e', wickDownColor: '#ef4444',
+    });
+    const volumeSeries = mainChart.addHistogramSeries({
+        color: 'rgba(99,102,241,0.3)',
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'volume',
+    });
+    mainChart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+
+    const ema9Series = mainChart.addLineSeries({ color: '#f97316', lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false });
+    const ema20Series = mainChart.addLineSeries({ color: '#60a5fa', lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false });
+    const vwapSeries  = mainChart.addLineSeries({ color: '#a78bfa', lineWidth: 1.5, lineStyle: LightweightCharts.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false });
+
+    const rsiSeries   = rsiChart.addLineSeries({ color: '#22c55e', lineWidth: 1.5, priceLineVisible: false, lastValueVisible: true });
+    const rsi70Series = rsiChart.addLineSeries({ color: 'rgba(239,68,68,0.4)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false });
+    const rsi30Series = rsiChart.addLineSeries({ color: 'rgba(34,197,94,0.4)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false });
+
+    // sync crosshair between charts
+    mainChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+        if (range) rsiChart.timeScale().setVisibleLogicalRange(range);
+    });
+
+    function isoToUnix(iso) { return Math.floor(new Date(iso).getTime() / 1000); }
+
+    function renderChart(data) {
+        const c = data.chart;
+        const len = c.timestamps.length;
+
+        const candles = [], vols = [], e9 = [], e20 = [], vwap = [], rsi = [], r70 = [], r30 = [];
+
+        for (let i = 0; i < len; i++) {
+            const t = isoToUnix(c.timestamps[i]);
+            if (!t || isNaN(t)) continue;
+            candles.push({ time: t, open: c.opens[i], high: c.highs[i], low: c.lows[i], close: c.closes[i] });
+            vols.push({ time: t, value: c.volumes[i], color: c.closes[i] >= c.opens[i] ? 'rgba(34,197,94,0.25)' : 'rgba(239,68,68,0.25)' });
+            if (c.ema_9[i]  != null) e9.push({ time: t, value: c.ema_9[i] });
+            if (c.ema_20[i] != null) e20.push({ time: t, value: c.ema_20[i] });
+            if (c.vwap[i]   != null) vwap.push({ time: t, value: c.vwap[i] });
+        }
+
+        // RSI approximated from close prices (14-period)
+        const closes = c.closes;
+        let gains = 0, losses = 0;
+        for (let i = 1; i <= 14 && i < closes.length; i++) {
+            const d = closes[i] - closes[i-1];
+            if (d > 0) gains += d; else losses -= d;
+        }
+        let avgGain = gains / 14, avgLoss = losses / 14;
+        for (let i = 14; i < closes.length; i++) {
+            const t = isoToUnix(c.timestamps[i]);
+            const d = closes[i] - closes[i-1];
+            avgGain = (avgGain * 13 + (d > 0 ? d : 0)) / 14;
+            avgLoss = (avgLoss * 13 + (d < 0 ? -d : 0)) / 14;
+            const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+            const rsiVal = 100 - (100 / (1 + rs));
+            rsi.push({ time: t, value: rsiVal });
+            r70.push({ time: t, value: 70 });
+            r30.push({ time: t, value: 30 });
+        }
+
+        candleSeries.setData(candles);
+        volumeSeries.setData(vols);
+        ema9Series.setData(e9);
+        ema20Series.setData(e20);
+        vwapSeries.setData(vwap);
+        rsiSeries.setData(rsi);
+        rsi70Series.setData(r70);
+        rsi30Series.setData(r30);
+
+        mainChart.timeScale().fitContent();
+    }
+
+    // ── Formatters ────────────────────────────────────────────────────────
+    const INR = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 });
+    function money(v) { return Number.isFinite(Number(v)) ? INR.format(v) : '—'; }
+    function fmt(v) { return v == null || v === 'N/A' ? '—' : v; }
+    function istTime(iso) {
+        const d = new Date(iso);
+        if (isNaN(d)) return '—';
+        return d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+    }
+
+    // ── UI updates ────────────────────────────────────────────────────────
+    function updateUI(data) {
+        // Company + price
+        document.getElementById('companyName').textContent = data.company_name;
+        document.getElementById('symbolTag').textContent   = `NSE: ${data.symbol}`;
+        document.getElementById('sectorText').textContent  = `Sector: ${data.sector}`;
+
+        const ltp    = data.quote.ltp;
+        const change = data.quote.change;
+        const isUp   = !String(change).startsWith('-');
+        document.getElementById('ltpValue').textContent    = money(ltp);
+        document.getElementById('ltpValue').className      = `text-2xl font-mono font-bold ${isUp ? 'text-emerald-400' : 'text-red-400'}`;
+        document.getElementById('changeValue').textContent = change;
+        document.getElementById('changeValue').className   = `text-xs font-mono font-semibold ${isUp ? 'text-emerald-500' : 'text-red-500'}`;
+        document.getElementById('vwapValue').textContent   = `${data.quote.vwap_deviation > 0 ? '+' : ''}${money(data.quote.vwap_deviation)}`;
+        document.getElementById('volumeValue').textContent = Number(data.quote.volume).toLocaleString('en-IN');
+
+        // Meta strip
+        document.getElementById('sourceValue').textContent      = data.data.quote_source.toUpperCase();
+        document.getElementById('sessionValue').textContent     = (data.quote.session || '—').toUpperCase();
+        document.getElementById('ageValue').textContent         = data.data.age_minutes != null ? `${data.data.age_minutes}m ago` : '—';
+        document.getElementById('latestCandleValue').textContent = istTime(data.data.latest_candle);
+        const optSrc = data.data.option_source || 'model';
+        const optEl  = document.getElementById('optionSourceMeta');
+        optEl.textContent = optSrc === 'nse_live' ? '✓ NSE LIVE' : 'MODELLED';
+        optEl.style.color = optSrc === 'nse_live' ? '#10b981' : '#f59e0b';
+
+        // Data status header
+        const live = data.data.mode === 'live';
+        const samp = data.data.mode === 'sample';
+        document.getElementById('dataStatusDot').className =
+            `w-2 h-2 rounded-full ${live ? 'bg-emerald-500 pulse-dot' : samp ? 'bg-amber-500' : 'bg-blue-500 pulse-dot'}`;
+        document.getElementById('dataStatusLabel').textContent = live ? 'LIVE DATA' : samp ? 'SAMPLE DATA' : 'MIXED DATA';
+        document.getElementById('lastRefresh').textContent = `Updated ${istTime(data.data.as_of)} IST`;
+        document.getElementById('footerDataMode').textContent =
+            `Quote: ${data.data.quote_source} | Candles: ${data.data.candle_source} | ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}`;
+
+        // Signal card
+        const sig = data.signal.status;
+        const sigColors  = { BUY:'#10b981', WATCH:'#f59e0b', NEUTRAL:'#818cf8', AVOID:'#ef4444', SELL:'#f43f5e' };
+        const sigStrokes = sigColors[sig] || '#818cf8';
+        document.getElementById('signalCard').className  = `signal-${sig} rounded-2xl p-5 flex flex-col gap-4 relative overflow-hidden`;
+        document.getElementById('signalText').textContent = sig;
+        document.getElementById('signalText').className   = `text-5xl font-extrabold tracking-tighter mt-2 text-${sig}`;
+
+        const conf = data.signal.confidence;
+        document.getElementById('confidenceValue').textContent = `${conf}%`;
+        document.getElementById('confidenceValue').style.color = sigStrokes;
+        document.getElementById('ringFill').style.strokeDasharray = `${conf},100`;
+        document.getElementById('ringFill').setAttribute('stroke', sigStrokes);
+
+        document.getElementById('riskValue').textContent     = fmt(data.signal.risk);
+        document.getElementById('strategyValue').textContent = fmt(data.signal.option_strategy);
+        document.getElementById('invalidIfText').textContent = `⚑ ${data.signal.invalid_if}`;
+
+        // Trade levels
+        document.getElementById('entryLevel').textContent   = money(data.levels.entry);
+        document.getElementById('target1Level').textContent = money(data.levels.target_1);
+        document.getElementById('target2Level').textContent = money(data.levels.target_2);
+        document.getElementById('slLevel').textContent      = money(data.levels.stop_loss);
+        const rrEl = document.getElementById('rrValue');
+        rrEl.textContent = data.levels.risk_reward ? `1:${data.levels.risk_reward}` : '—';
+        rrEl.style.color = data.levels.risk_reward >= 2 ? '#10b981' : data.levels.risk_reward >= 1 ? '#f59e0b' : '#ef4444';
+        const method = data.levels.method || 'atr';
+        document.getElementById('levelsMethodBadge').textContent = method === 'oi_walls' ? '⭐ OI Walls' : 'ATR Based';
+        document.getElementById('oiSupportRef').textContent  = money(data.levels.oi_support);
+        document.getElementById('oiResistRef').textContent   = money(data.levels.oi_resistance);
+        const oiSB = document.getElementById('oiSupportBadge');
+        const oiRB = document.getElementById('oiResistanceBadge');
+        if (method === 'oi_walls') { oiSB.classList.remove('hidden'); oiRB.classList.remove('hidden'); }
+        else { oiSB.classList.add('hidden'); oiRB.classList.add('hidden'); }
+
+        // CE options table
+        renderCETable(data.ce_list || [], data.options, data.quote.ltp);
+
+        // Scores
+        const sc = data.scores;
+        document.getElementById('scoreT').textContent = `${sc.technical}/100`; document.getElementById('barT').style.width = `${sc.technical}%`;
+        document.getElementById('scoreO').textContent = `${sc.options}/100`;   document.getElementById('barO').style.width = `${sc.options}%`;
+        document.getElementById('scoreN').textContent = `${sc.news}/100`;      document.getElementById('barN').style.width = `${sc.news}%`;
+        document.getElementById('scoreM').textContent = `${sc.market}/100`;    document.getElementById('barM').style.width = `${sc.market}%`;
+
+        // Option bias chips
+        document.getElementById('optionBiasChip').textContent = fmt(data.options.directional_bias);
+        document.getElementById('pcrChip').textContent        = fmt(data.options.pcr);
+        document.getElementById('maxPainChip').textContent    = money(data.options.max_pain);
+
+        // Technicals sidebar
+        const tech = data.technicals;
+        const rsiVal = tech.rsi || 50;
+        document.getElementById('rsiLabel').textContent  = `${rsiVal} ${rsiVal > 70 ? '🔴 OB' : rsiVal < 30 ? '🟢 OS' : ''}`;
+        document.getElementById('rsiMarker').style.left  = `${rsiVal}%`;
+        document.getElementById('ema9Label').textContent  = money(tech.ema_9);
+        document.getElementById('ema20Label').textContent = money(tech.ema_20);
+        document.getElementById('macdLabel').textContent  = tech.macd != null ? tech.macd.toFixed(2) : '—';
+        document.getElementById('atrLabel').textContent   = tech.atr != null ? tech.atr.toFixed(2) : '—';
+
+        // Options chain
+        document.getElementById('liquidityValue').textContent   = (() => {
+            const l = data.options.liquidity || {};
+            return l.passes !== undefined ? `${l.passes ? '✓ PASS' : '✗ FAIL'}${l.avg_spread_pct != null ? ` · spread ${l.avg_spread_pct}%` : ''}` : '—';
+        })();
+        document.getElementById('ivValue').textContent       = fmt(data.options.strategy);
+        document.getElementById('tradePermValue').textContent = fmt(data.options.trade_permission);
+
+        const putOi  = Number(data.options.put_oi_support)  || 0;
+        const callOi = Number(data.options.call_oi_resistance) || 0;
+        document.getElementById('putOiBar').textContent  = money(putOi);
+        document.getElementById('callOiBar').textContent = money(callOi);
+        const total = putOi + callOi || 1;
+        document.getElementById('putOiBarFill').style.width  = `${(putOi / total * 100).toFixed(1)}%`;
+        document.getElementById('callOiBarFill').style.width = `${(callOi / total * 100).toFixed(1)}%`;
+
+        // Related options table
+        renderRelatedOptions(data.related_options || []);
+
+        // News
+        const newsColor = { positive: 'emerald', negative: 'red', neutral: 'gray' };
+        document.getElementById('newsSentimentBadge').textContent = (data.news.sentiment || 'neutral').toUpperCase();
+        document.getElementById('newsSentimentBadge').style.color  = newsColor[data.news.sentiment] === 'emerald' ? '#10b981' : newsColor[data.news.sentiment] === 'red' ? '#ef4444' : '#9ca3af';
+        document.getElementById('newsImpactBadge').textContent     = (data.news.impact || 'low').toUpperCase();
+        document.getElementById('newsContainer').innerHTML = (data.news.items || []).map(item => {
+            const sc = newsColor[item.sentiment] || 'gray';
+            const borderColor = sc === 'emerald' ? '#10b981' : sc === 'red' ? '#ef4444' : '#4b5563';
+            return `<div class="flex gap-3 rounded-xl bg-white/[.03] border border-white/[.05] px-3 py-2.5 hover:border-white/10 transition">
+                <div class="w-0.5 shrink-0 rounded-full self-stretch" style="background:${borderColor}"></div>
+                <div>
+                    <p class="text-xs font-medium text-gray-200 leading-snug">${item.title}</p>
+                    <span class="text-[10px] font-mono mt-1 inline-block" style="color:${borderColor}">${(item.sentiment || 'neutral').toUpperCase()}</span>
+                </div>
+            </div>`;
+        }).join('') || '<p class="text-xs text-gray-600">No news available.</p>';
+
+        // Reasons
+        const icons = ['trending-up','zap','activity','check-circle','target','brain','layers','info'];
+        document.getElementById('reasonsContainer').innerHTML = data.reasons.map((r, i) => `
+            <div class="flex items-start gap-3 bg-white/[.03] border border-white/[.06] rounded-xl px-3 py-2.5 text-xs text-gray-300">
+                <i data-lucide="${icons[i % icons.length]}" class="w-3.5 h-3.5 mt-0.5 shrink-0 text-indigo-400"></i>
+                ${r}
+            </div>`).join('');
+        lucide.createIcons();
+
+        // Symbol buttons (update price after fetch)
+        symbolPrices[data.symbol] = { ltp, change, up: isUp };
+        renderSymbolButtons();
+
+        // Chart
+        renderChart(data);
+    }
+
+    function renderSymbolButtons() {
+        document.getElementById('symbolButtons').innerHTML = symbols.map(sym => {
+            const p  = symbolPrices[sym];
+            const active = sym === currentSymbol;
+            return `<button onclick="selectSymbol('${sym}')"
+                class="flex flex-col items-start p-2.5 rounded-xl border transition text-left ${active ? 'border-indigo-500 bg-indigo-950/40' : 'border-white/[.06] bg-white/[.02] hover:border-white/10'}">
+                <span class="text-[10px] font-mono ${active ? 'text-indigo-400' : 'text-gray-600'}">NSE</span>
+                <span class="text-sm font-bold">${sym}</span>
+                ${p ? `<span class="text-[10px] font-mono mt-0.5 ${p.up ? 'text-emerald-500' : 'text-red-500'}">${p.change}</span>` : ''}
+            </button>`;
+        }).join('');
+    }
+
+    function renderCETable(rows, options, spot) {
+        document.getElementById('ceSpot').textContent   = money(spot);
+
+        const tb = document.getElementById('ceTableBody');
+        if (!rows.length) {
+            tb.innerHTML = '<tr><td colspan="10" class="py-3 text-gray-600 text-xs">No CE data — market may be closed.</td></tr>';
+            return;
+        }
+
+        // show expiry from first row if available via options object
+        if (options && options.expiry) document.getElementById('ceExpiry').textContent = options.expiry || '—';
+
+        tb.innerHTML = rows.map(r => {
+            const isRec    = r.tag && r.tag.includes('Recommended');
+            const isAgg    = r.tag && r.tag.includes('Aggressive');
+            const isCons   = r.tag && r.tag.includes('Conservative');
+            const rowClass = isRec ? 'bg-emerald-950/20' : '';
+            const mColor   = r.moneyness === 'ATM' ? '#818cf8'
+                           : r.moneyness === 'ITM' ? '#10b981'
+                           : r.moneyness === 'OTM' ? '#f59e0b'
+                           : '#6b7280';
+            const oiChgColor = r.change_oi > 0 ? '#10b981' : r.change_oi < 0 ? '#ef4444' : '#6b7280';
+            const spreadColor = r.spread_pct < 2 ? '#10b981' : r.spread_pct < 5 ? '#f59e0b' : '#ef4444';
+            const tagHtml = isRec  ? '<span class="text-[10px] font-bold text-emerald-400 bg-emerald-950 border border-emerald-700 px-1.5 py-0.5 rounded-full">⭐ BUY</span>'
+                          : isAgg  ? '<span class="text-[10px] font-bold text-orange-400 bg-orange-950/40 border border-orange-700/40 px-1.5 py-0.5 rounded-full">Aggressive</span>'
+                          : isCons ? '<span class="text-[10px] font-bold text-blue-400 bg-blue-950/40 border border-blue-700/40 px-1.5 py-0.5 rounded-full">Conservative</span>'
+                          : '';
+            return `<tr class="text-gray-300 ${rowClass}">
+                <td class="py-2 font-mono font-bold text-gray-100">₹${r.strike}</td>
+                <td class="py-2">
+                    <span class="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded" style="color:${mColor}; background:${mColor}22">${r.moneyness}</span>
+                </td>
+                <td class="py-2 text-right font-mono font-bold text-gray-100">${money(r.ltp)}</td>
+                <td class="py-2 text-right font-mono text-gray-400">${money(r.bid)} / ${money(r.ask)}</td>
+                <td class="py-2 text-right font-mono">${(r.oi/100000).toFixed(1)}L</td>
+                <td class="py-2 text-right font-mono font-bold" style="color:${oiChgColor}">${r.change_oi > 0 ? '+' : ''}${(r.change_oi/1000).toFixed(1)}K</td>
+                <td class="py-2 text-right font-mono">${r.volume > 0 ? (r.volume/100000).toFixed(1)+'L' : '—'}</td>
+                <td class="py-2 text-right font-mono text-purple-400">${r.iv > 0 ? r.iv.toFixed(1)+'%' : '—'}</td>
+                <td class="py-2 text-right font-mono" style="color:${spreadColor}">${r.spread_pct}%</td>
+                <td class="py-2">${tagHtml}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    function renderRelatedOptions(rows) {
+        const tb = document.getElementById('relatedOptionsRows');
+        if (!rows.length) { tb.innerHTML = '<tr><td colspan="6" class="py-3 text-gray-600 text-xs">No related symbols.</td></tr>'; return; }
+        tb.innerHTML = rows.map(r => `
+            <tr class="text-gray-300 text-xs">
+                <td class="py-2 pr-2 font-semibold text-gray-100">${r.symbol}<div class="text-[10px] text-gray-600">${r.name}</div></td>
+                <td class="py-2 text-right font-mono">${money(r.spot)}</td>
+                <td class="py-2 text-right font-mono ${Number(r.pcr) >= 1 ? 'text-emerald-400' : 'text-amber-400'}">${r.pcr ?? '—'}</td>
+                <td class="py-2 text-right font-mono text-emerald-400">${money(r.put_oi_support)}</td>
+                <td class="py-2 text-right font-mono text-red-400">${money(r.call_oi_resistance)}</td>
+                <td class="py-2 text-right font-mono">${r.bias || '—'}</td>
+            </tr>`).join('');
+    }
+
+    // ── Fast price tick (every 5 s) ────────────────────────────────────────
+    async function tickPrice() {
+        try {
+            const res = await fetch(`/api/quote/${currentSymbol}`);
+            if (!res.ok) return;
+            const q   = await res.json();
+            const isUp = q.change_pct >= 0;
+
+            document.getElementById('ltpValue').textContent    = money(q.ltp);
+            document.getElementById('ltpValue').style.color    = isUp ? '#10b981' : '#ef4444';
+            document.getElementById('changeValue').textContent = q.change_text;
+            document.getElementById('changeValue').style.color = isUp ? '#10b981' : '#ef4444';
+            document.getElementById('volumeValue').textContent = Number(q.volume).toLocaleString('en-IN');
+            document.getElementById('sessionValue').textContent = (q.session || '—').toUpperCase();
+
+            const live = q.source !== 'sample';
+            document.getElementById('dataStatusDot').className =
+                `w-2 h-2 rounded-full ${live ? 'bg-emerald-500 pulse-dot' : 'bg-amber-500'}`;
+            document.getElementById('dataStatusLabel').textContent =
+                q.source === 'nse' ? 'NSE LIVE' : q.source === 'yahoo' ? 'YAHOO (~15m)' : 'SAMPLE DATA';
+
+            symbolPrices[currentSymbol] = { ltp: q.ltp, change: q.change_text, up: isUp };
+            renderSymbolButtons();
+        } catch (_) {}
+    }
+
+    // ── Full signal fetch ──────────────────────────────────────────────────
+    async function fetchSignal() {
+        const btn  = document.getElementById('refreshBtn');
+        const icon = document.getElementById('refreshIcon');
+        document.getElementById('mainContent').classList.add('loading-overlay');
+        btn.disabled = true;
+        icon.style.animation = 'spin 1s linear infinite';
+        document.getElementById('errorBanner').classList.add('hidden');
+
+        try {
+            const res  = await fetch('/api/signal', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbol: currentSymbol, timeframe: currentTf, market_score: +document.getElementById('marketScore').value })
+            });
+            const data = await res.json();
+            if (res.ok) { updateUI(data); resetCountdown(); }
+            else {
+                document.getElementById('errorText').textContent = data.error || 'Failed to load signal.';
+                document.getElementById('errorBanner').classList.remove('hidden');
+            }
+        } catch (e) {
+            document.getElementById('errorText').textContent = 'Cannot reach server. Is Flask running?';
+            document.getElementById('errorBanner').classList.remove('hidden');
+        } finally {
+            document.getElementById('mainContent').classList.remove('loading-overlay');
+            btn.disabled = false;
+            icon.style.animation = '';
+        }
+    }
+
+    // ── Countdown ──────────────────────────────────────────────────────────
+    function resetCountdown() {
+        countdownVal = 30;
+        document.getElementById('countdown').textContent = countdownVal;
+    }
+
+    function startTimers() {
+        clearInterval(fullRefreshId); clearInterval(tickId); clearInterval(countdownId);
+        fullRefreshId = setInterval(fetchSignal, 30000);
+        tickId        = setInterval(tickPrice,   5000);
+        countdownId   = setInterval(() => {
+            countdownVal = Math.max(0, countdownVal - 1);
+            document.getElementById('countdown').textContent = countdownVal;
+        }, 1000);
+    }
+
+    function stopTimers() {
+        clearInterval(fullRefreshId); clearInterval(tickId); clearInterval(countdownId);
+        fullRefreshId = null; tickId = null; countdownId = null;
+    }
+
+    function selectSymbol(sym) { currentSymbol = sym; renderSymbolButtons(); fetchSignal(); }
+
+    // ── Event wiring ───────────────────────────────────────────────────────
+    document.getElementById('marketScore').addEventListener('input', () => {
+        document.getElementById('marketScoreValue').textContent = document.getElementById('marketScore').value;
+    });
+    document.getElementById('refreshBtn').addEventListener('click', () => {
+        fetchSignal();
+        if (document.getElementById('autoRefreshToggle').checked) resetCountdown();
+    });
+    document.getElementById('autoRefreshToggle').addEventListener('change', e => {
+        e.target.checked ? startTimers() : stopTimers();
+    });
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentTf = btn.dataset.tf;
+            fetchSignal();
+        });
+    });
+    document.addEventListener('keydown', e => {
+        if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && document.activeElement.tagName !== 'INPUT') fetchSignal();
+    });
+    window.addEventListener('resize', () => {
+        mainChart.resize(document.getElementById('chartContainer').clientWidth, 300);
+        rsiChart.resize(document.getElementById('rsiContainer').clientWidth, 80);
+    });
+
+    // ── Init ───────────────────────────────────────────────────────────────
+    renderSymbolButtons();
+    fetchSignal();
+    startTimers();   // auto-refresh ON by default
+</script>
+</body>
+</html>
