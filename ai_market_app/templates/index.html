@@ -54,9 +54,52 @@
             border-radius: 50%;
             animation: spin 0.75s linear infinite;
         }
+        /* ── Top progress bar ── */
+        #progressBar {
+            position: fixed; top: 0; left: 0; z-index: 999;
+            height: 3px; width: 0%;
+            background: linear-gradient(90deg, #6366f1, #818cf8, #a5b4fc);
+            box-shadow: 0 0 12px #6366f180;
+            transition: width 0.3s ease, opacity 0.4s ease;
+            opacity: 0;
+            border-radius: 0 2px 2px 0;
+        }
+        #progressBar.loading {
+            opacity: 1;
+            animation: progress-fill 2s ease-out forwards;
+        }
+        #progressBar.done {
+            width: 100% !important;
+            opacity: 0;
+            transition: width 0.15s ease, opacity 0.5s ease 0.15s;
+        }
+        @keyframes progress-fill {
+            0%   { width: 0%; }
+            30%  { width: 45%; }
+            60%  { width: 70%; }
+            90%  { width: 88%; }
+            100% { width: 92%; }
+        }
+
         /* dim cards while full-signal refresh runs (not symbol switch) */
         .signal-loading .card,
-        .signal-loading .glass { opacity: 0.6; pointer-events: none; transition: opacity .2s; }
+        .signal-loading .glass {
+            opacity: 0.55;
+            pointer-events: none;
+            transition: opacity .25s;
+        }
+
+        /* skeleton pulse on key value elements during refresh */
+        .signal-loading #ltpValue,
+        .signal-loading #signalText,
+        .signal-loading #confidenceValue,
+        .signal-loading #aiCommentary {
+            color: transparent !important;
+            background: linear-gradient(90deg, #1e293b 25%, #2d3f5a 50%, #1e293b 75%);
+            background-size: 300% 100%;
+            animation: shimmer 1.2s infinite;
+            border-radius: 4px;
+        }
 
         .pulse-dot { animation: pulse-dot 2s cubic-bezier(0.4,0,0.6,1) infinite; }
         @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.4} }
@@ -77,6 +120,7 @@
     </style>
 </head>
 <body class="min-h-screen flex flex-col">
+<div id="progressBar"></div>
 
 <!-- ─── MARKET BAR ─── -->
 <div id="marketBar" class="bg-[#060a12] border-b border-white/[.04] px-5 py-2 flex items-center gap-6 overflow-x-auto text-xs font-mono">
@@ -999,6 +1043,24 @@
         } catch (_) {}
     }
 
+    // ── Progress bar helpers ───────────────────────────────────────────────
+    function startProgress() {
+        const bar = document.getElementById('progressBar');
+        bar.classList.remove('done');
+        bar.style.width = '0%';
+        bar.style.opacity = '1';
+        // force reflow so animation restarts
+        void bar.offsetWidth;
+        bar.classList.add('loading');
+    }
+
+    function finishProgress() {
+        const bar = document.getElementById('progressBar');
+        bar.classList.remove('loading');
+        bar.classList.add('done');
+        setTimeout(() => bar.classList.remove('done'), 700);
+    }
+
     // ── Full signal fetch ──────────────────────────────────────────────────
     async function fetchSignal() {
         const btn      = document.getElementById('refreshBtn');
@@ -1006,7 +1068,7 @@
         const main     = document.getElementById('mainContent');
         const isSwitch = document.getElementById('loadingOverlay').classList.contains('show');
 
-        // For auto-refresh (not symbol switch) use a lighter dim
+        startProgress();
         if (!isSwitch) main.classList.add('signal-loading');
         btn.disabled = true;
         icon.style.animation = 'spin 0.75s linear infinite';
@@ -1028,6 +1090,7 @@
             document.getElementById('errorText').textContent = 'Cannot reach server. Is Flask running?';
             document.getElementById('errorBanner').classList.remove('hidden');
         } finally {
+            finishProgress();
             hideSymbolLoader();
             main.classList.remove('signal-loading');
             btn.disabled = false;
