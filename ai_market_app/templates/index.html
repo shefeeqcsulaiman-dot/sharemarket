@@ -526,25 +526,23 @@
             <div id="reasonsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-2"></div>
         </div>
 
-        <!-- ── PORTFOLIO ANALYSIS PANEL ── -->
+        <!-- ── OPTION POSITIONS — AI ANALYSIS ── -->
         <div class="card p-5" id="portfolioAnalysisPanel">
             <div class="flex items-center justify-between mb-4">
                 <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
-                    <i data-lucide="briefcase" class="w-3.5 h-3.5 text-indigo-400"></i>
-                    My Portfolio — AI Analysis
+                    <i data-lucide="activity" class="w-3.5 h-3.5 text-indigo-400"></i>
+                    Open Options — Live AI Analysis
                 </h3>
                 <div class="flex items-center gap-3">
                     <span id="portfolioUpdatedAt" class="text-[10px] font-mono text-gray-600">—</span>
                     <div class="flex items-center gap-1.5 text-[10px] font-mono text-gray-600">
                         <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 pulse-dot"></span>
-                        Next in <span id="portfolioCountdown" class="text-indigo-400 font-bold">60</span>s
+                        Refresh in <span id="portfolioCountdown" class="text-indigo-400 font-bold">60</span>s
                     </div>
                 </div>
             </div>
-            <div id="portfolioAnalysisBody">
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" id="portfolioCards">
-                    <div class="text-xs text-gray-600 col-span-full py-3">Loading portfolio analysis…</div>
-                </div>
+            <div id="portfolioCards" class="space-y-4">
+                <div class="text-xs text-gray-600 py-3">Loading option positions…</div>
             </div>
         </div>
 
@@ -1326,90 +1324,181 @@
     };
 
     async function loadPortfolioAnalysis() {
+        const cards = document.getElementById('portfolioCards');
+        cards.innerHTML = `<div class="text-xs text-gray-600 flex items-center gap-2 py-2">
+            <div class="w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+            Fetching live option positions + running AI analysis…
+        </div>`;
+
         try {
             const res  = await fetch('/api/portfolio/analysis');
             const data = await res.json();
 
             if (!res.ok || data.need_auth) {
-                document.getElementById('portfolioCards').innerHTML =
-                    `<div class="col-span-full text-xs text-amber-400 flex items-center gap-2">
-                        <i data-lucide="lock" class="w-4 h-4"></i>
-                        Portfolio not connected — <a href="/auth/upstox" target="_blank" class="underline text-indigo-400">Login with Upstox</a>
-                    </div>`;
-                lucide.createIcons();
-                return;
+                cards.innerHTML = `<div class="text-xs text-amber-400 flex items-center gap-2 py-2">
+                    <i data-lucide="lock" class="w-4 h-4"></i>
+                    Portfolio not connected —
+                    <a href="/auth/upstox" target="_blank" class="underline text-indigo-400">Login with Upstox</a>
+                </div>`;
+                lucide.createIcons(); return;
             }
 
             document.getElementById('portfolioUpdatedAt').textContent = `Updated ${data.updated_at}`;
             portfolioCountdownVal = 60;
 
-            const cards = document.getElementById('portfolioCards');
             if (!data.analysis || !data.analysis.length) {
-                cards.innerHTML = '<div class="col-span-full text-xs text-gray-600 py-3">No open positions or holdings found.</div>';
+                cards.innerHTML = '<div class="text-xs text-gray-600 py-3">No open option positions found.</div>';
                 return;
             }
 
-            cards.innerHTML = data.analysis.map(item => {
-                const cfg      = SIG_CONFIG[item.signal] || SIG_CONFIG['HOLD'];
-                const pnlColor = item.pnl >= 0 ? '#10b981' : '#ef4444';
-                const typeTag  = item.type === 'option'
-                    ? `<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-950/50 text-amber-400">OPTION${item.dte != null ? ' · ' + item.dte + 'd' : ''}</span>`
-                    : `<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-blue-950/50 text-blue-400">STOCK</span>`;
-
-                return `
-                <div class="rounded-xl p-4 border transition hover:opacity-90"
-                     style="background:${cfg.bg}; border-color:${cfg.border}">
-
-                    <div class="flex items-start justify-between mb-3">
-                        <div>
-                            <div class="flex items-center gap-2 flex-wrap">
-                                <span class="font-bold text-gray-100 text-sm">${item.symbol}</span>
-                                ${typeTag}
-                            </div>
-                            <div class="text-[10px] font-mono text-gray-500 mt-0.5">
-                                Qty ${item.qty} · Avg ₹${item.avg_price} · LTP ₹${item.ltp}
-                            </div>
-                        </div>
-                        <div class="text-right shrink-0">
-                            <div class="text-xs font-bold font-mono px-2.5 py-1 rounded-full border"
-                                 style="color:${cfg.color}; background:${cfg.bg}; border-color:${cfg.border}">
-                                ${item.signal}
-                            </div>
-                            <div class="text-[11px] font-mono font-bold mt-1.5" style="color:${pnlColor}">
-                                ${item.pnl >= 0 ? '+' : ''}₹${Math.abs(item.pnl).toLocaleString('en-IN', {maximumFractionDigits:0})}
-                                ${item.pnl_pct != null ? `(${item.pnl_pct >= 0 ? '+' : ''}${item.pnl_pct}%)` : ''}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="space-y-1">
-                        ${(item.reasons || []).map(r =>
-                            `<div class="text-[11px] text-gray-400 flex items-start gap-1.5">
-                                <span class="mt-0.5 shrink-0 w-1 h-1 rounded-full bg-gray-600 inline-block"></span>
-                                ${r}
-                            </div>`
-                        ).join('')}
-                    </div>
-
-                    <!-- Score bar -->
-                    <div class="mt-3 pt-2 border-t border-white/[.05]">
-                        <div class="flex justify-between text-[10px] font-mono text-gray-600 mb-1">
-                            <span>Signal strength</span>
-                            <span style="color:${cfg.color}">${item.score}/100</span>
-                        </div>
-                        <div class="h-1 bg-gray-900 rounded-full overflow-hidden">
-                            <div class="h-full rounded-full transition-all duration-700"
-                                 style="width:${item.score}%; background:${cfg.color}"></div>
-                        </div>
-                    </div>
-                </div>`;
-            }).join('');
-
+            cards.innerHTML = data.analysis.map(item => renderOptionCard(item)).join('');
             lucide.createIcons();
         } catch (e) {
-            document.getElementById('portfolioCards').innerHTML =
-                '<div class="col-span-full text-xs text-gray-600">Could not load portfolio analysis.</div>';
+            cards.innerHTML = '<div class="text-xs text-gray-600">Could not load analysis. Check server.</div>';
         }
+    }
+
+    function renderOptionCard(item) {
+        const cfg      = SIG_CONFIG[item.signal] || SIG_CONFIG['HOLD'];
+        const pnlColor = item.pnl >= 0 ? '#10b981' : '#ef4444';
+        const t        = item.technicals || {};
+        const ch       = item.chain || {};
+        const bidKey   = item.option_type === 'CE' ? 'call_bid' : 'put_bid';
+        const askKey   = item.option_type === 'CE' ? 'call_ask' : 'put_ask';
+        const oiKey    = item.option_type === 'CE' ? 'call_oi'  : 'put_oi';
+        const ivKey    = item.option_type === 'CE' ? 'call_iv'  : 'put_iv';
+        const coiKey   = item.option_type === 'CE' ? 'call_change_oi' : 'put_change_oi';
+
+        const oi       = ch[oiKey]  || 0;
+        const iv       = ch[ivKey]  || 0;
+        const bid      = ch[bidKey] || 0;
+        const ask      = ch[askKey] || 0;
+        const coi      = ch[coiKey] || 0;
+        const coiColor = coi > 0 ? '#10b981' : '#ef4444';
+
+        // Trend arrow from EMAs
+        const trendUp  = t.ema9 && t.ema20 && t.ema9 > t.ema20;
+        const trendArr = trendUp ? '&#8599;' : '&#8600;';
+        const trendClr = trendUp ? '#10b981' : '#ef4444';
+
+        // Decay %
+        const decay = item.avg_price > 0
+            ? ((item.ltp - item.avg_price) / item.avg_price * 100).toFixed(1)
+            : 0;
+        const decayColor = Number(decay) >= 0 ? '#10b981' : '#ef4444';
+
+        // Break-even display
+        const beStr = item.breakeven ? `BE: ₹${item.breakeven}` : '';
+
+        return `
+        <div class="rounded-2xl border overflow-hidden" style="border-color:${cfg.border}; background:${cfg.bg}">
+
+            <!-- Header row -->
+            <div class="flex items-center justify-between px-5 py-3 border-b" style="border-color:${cfg.border}40">
+                <div class="flex items-center gap-3 flex-wrap">
+                    <span class="text-base font-bold text-gray-100">${item.symbol}</span>
+                    <span class="text-[10px] font-mono px-2 py-0.5 rounded-full border"
+                          style="color:${cfg.color}; border-color:${cfg.border}; background:${cfg.bg}">
+                          ${item.option_type} · ${item.moneyness}
+                    </span>
+                    ${item.dte != null ? `<span class="text-[10px] font-mono text-gray-500">${item.dte}d to ${item.expiry_str}</span>` : ''}
+                </div>
+                <div class="flex items-center gap-3 shrink-0">
+                    <div class="text-right">
+                        <div class="text-[10px] text-gray-500 font-mono">P&L</div>
+                        <div class="text-sm font-bold font-mono" style="color:${pnlColor}">
+                            ${item.pnl >= 0 ? '+' : ''}₹${Math.abs(item.pnl).toLocaleString('en-IN', {maximumFractionDigits:0})}
+                        </div>
+                    </div>
+                    <div class="text-sm font-bold font-mono px-3 py-1.5 rounded-xl border"
+                         style="color:${cfg.color}; border-color:${cfg.border}; background:rgba(0,0,0,0.3)">
+                        ${item.signal}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Data grid -->
+            <div class="px-5 py-4 grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3 text-xs font-mono">
+
+                <!-- Col 1: Position -->
+                <div class="space-y-2">
+                    <div class="text-gray-600 text-[10px] uppercase tracking-wider">Position</div>
+                    <div><span class="text-gray-500">Qty</span> <strong class="text-gray-200">${item.qty.toLocaleString('en-IN')}</strong></div>
+                    <div><span class="text-gray-500">Avg</span> <strong class="text-gray-200">₹${item.avg_price}</strong></div>
+                    <div><span class="text-gray-500">LTP</span> <strong class="text-gray-100">₹${item.ltp}</strong></div>
+                    <div><span class="text-gray-500">Decay</span>
+                        <strong style="color:${decayColor}">${Number(decay) >= 0 ? '+' : ''}${decay}%</strong>
+                    </div>
+                    ${beStr ? `<div class="text-amber-400 text-[10px]">${beStr}</div>` : ''}
+                </div>
+
+                <!-- Col 2: Option chain data -->
+                <div class="space-y-2">
+                    <div class="text-gray-600 text-[10px] uppercase tracking-wider">Option Chain</div>
+                    <div><span class="text-gray-500">Strike</span> <strong class="text-gray-200">₹${item.strike}</strong></div>
+                    <div><span class="text-gray-500">Bid/Ask</span> <strong class="text-gray-200">${bid ? `₹${bid}/₹${ask}` : '—'}</strong></div>
+                    <div><span class="text-gray-500">OI</span> <strong class="text-gray-200">${oi ? (oi/100000).toFixed(1)+'L' : '—'}</strong>
+                        ${coi ? `<span style="color:${coiColor}" class="ml-1">(${coi > 0?'+':''}${(coi/1000).toFixed(0)}K)</span>` : ''}
+                    </div>
+                    <div><span class="text-gray-500">IV</span> <strong class="text-purple-400">${iv ? iv.toFixed(1)+'%' : '—'}</strong></div>
+                    <div><span class="text-gray-500">PCR</span>
+                        <strong style="color:${item.pcr >= 1 ? '#10b981' : '#ef4444'}">${item.pcr}</strong>
+                    </div>
+                </div>
+
+                <!-- Col 3: Underlying technicals -->
+                <div class="space-y-2">
+                    <div class="text-gray-600 text-[10px] uppercase tracking-wider">${item.underlying} Chart</div>
+                    <div><span class="text-gray-500">Spot</span> <strong class="text-gray-200">₹${item.spot}</strong>
+                        <span style="color:${trendClr}" class="ml-1">${trendArr}</span>
+                    </div>
+                    ${t.rsi ? `<div><span class="text-gray-500">RSI</span> <strong style="color:${t.rsi>70?'#ef4444':t.rsi<35?'#10b981':'#818cf8'}">${t.rsi}</strong></div>` : ''}
+                    ${t.ema9 ? `<div><span class="text-gray-500">EMA9</span> <strong class="text-orange-400">₹${t.ema9}</strong></div>` : ''}
+                    ${t.ema20 ? `<div><span class="text-gray-500">EMA20</span> <strong class="text-blue-400">₹${t.ema20}</strong></div>` : ''}
+                    ${t.vwap ? `<div><span class="text-gray-500">VWAP</span> <strong class="text-purple-400">₹${t.vwap}</strong></div>` : ''}
+                </div>
+
+                <!-- Col 4: OI walls & action -->
+                <div class="space-y-2">
+                    <div class="text-gray-600 text-[10px] uppercase tracking-wider">OI Structure</div>
+                    ${item.call_wall ? `<div><span class="text-red-500">Call Wall</span> <strong class="text-red-400">₹${item.call_wall}</strong></div>` : ''}
+                    ${item.put_wall  ? `<div><span class="text-emerald-500">Put Wall</span> <strong class="text-emerald-400">₹${item.put_wall}</strong></div>` : ''}
+                    ${item.max_pain  ? `<div><span class="text-gray-500">Max Pain</span> <strong class="text-amber-400">₹${item.max_pain}</strong></div>` : ''}
+                    <div><span class="text-gray-500">Bias</span>
+                        <strong style="color:${item.chain_bias==='BULLISH'||item.chain_bias==='BULLISH_BREAKOUT'?'#10b981':item.chain_bias==='BEARISH'?'#ef4444':'#9ca3af'}">
+                            ${item.chain_bias || 'NEUTRAL'}
+                        </strong>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Reasons + Action -->
+            <div class="px-5 pb-4 space-y-2">
+                <div class="rounded-xl px-3 py-2.5 text-xs font-semibold flex items-center gap-2 border"
+                     style="color:${cfg.color}; border-color:${cfg.border}; background:rgba(0,0,0,0.2)">
+                    <i data-lucide="zap" class="w-3.5 h-3.5 shrink-0"></i>
+                    ${item.action}
+                </div>
+                <div class="space-y-1">
+                    ${(item.reasons || []).map(r =>
+                        `<div class="text-[11px] text-gray-400 flex items-start gap-1.5">
+                            <span class="w-1 h-1 rounded-full bg-gray-600 shrink-0 mt-1.5 inline-block"></span>${r}
+                        </div>`
+                    ).join('')}
+                </div>
+                <!-- Signal bar -->
+                <div class="pt-1">
+                    <div class="flex justify-between text-[10px] text-gray-600 mb-1">
+                        <span>AI confidence</span>
+                        <span style="color:${cfg.color}">${item.score}/100</span>
+                    </div>
+                    <div class="h-1.5 bg-gray-900 rounded-full overflow-hidden">
+                        <div class="h-full rounded-full transition-all duration-700"
+                             style="width:${item.score}%; background:linear-gradient(90deg,${cfg.border},${cfg.color})"></div>
+                    </div>
+                </div>
+            </div>
+        </div>`;
     }
 
     function startPortfolioTimer() {

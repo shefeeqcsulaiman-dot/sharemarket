@@ -17,7 +17,7 @@ from analysis.signal_engine import generate_signal
 from analysis.risk_engine import calculate_trade_levels, recommend_ce_strikes
 from analysis.patterns import detect as detect_patterns
 from analysis.volatility import classify as classify_volatility
-from analysis.portfolio_analyst import analyse_holding, analyse_position
+from analysis.portfolio_analyst import analyse_option_position
 
 app = Flask(__name__)
 NSE_TZ = ZoneInfo("Asia/Kolkata")
@@ -277,95 +277,60 @@ def portfolio_holdings():
 @app.route("/api/portfolio/analysis")
 def portfolio_analysis():
     """
-    Fetch live positions + holdings, run AI analysis on each,
-    return unified list with BUY MORE / HOLD / EXIT signals.
+    Deep option position analysis — CE/PE only.
+    Fetches live positions, runs full technicals + option chain analysis.
     """
     from dotenv import load_dotenv; load_dotenv(override=True)
+    import re as _re
 
-    pos_data  = _upstox_get("/v2/portfolio/short-term-positions")
-    hold_data = _upstox_get("/v2/portfolio/long-term-holdings")
-
-    if pos_data.get("status") != "success" or hold_data.get("status") != "success":
+    pos_data = _upstox_get("/v2/portfolio/short-term-positions")
+    if pos_data.get("status") != "success":
         return jsonify({"status": "error", "need_auth": True,
                         "error": "Portfolio access requires login"}), 401
 
-    positions = pos_data.get("data") or []
-    holdings  = hold_data.get("data") or []
+    positions = [p for p in (pos_data.get("data") or [])
+                 if int(p.get("quantity", 0) or 0) != 0
+                 and p.get("exchange") == "NFO"]
 
     results = []
 
-    # ── Analyse each holding ──────────────────────────────────────────────
-    for h in holdings:
-        sym = h.get("tradingsymbol", "")
-        qty = int(h.get("quantity", 0) or 0)
-        if qty == 0:
-            continue
-        holding_dict = {
-            "symbol":    sym,
-            "avg_price": float(h.get("average_price", 0) or 0),
-            "ltp":       float(h.get("last_price", 0) or 0),
-            "pnl":       float(h.get("pnl", 0) or 0),
-            "pnl_pct":   float(h.get("day_change_percentage", 0) or 0),
-            "quantity":  qty,
-        }
-        # Override pnl_pct with actual total return
-        avg  = holding_dict["avg_price"]
-        ltp  = holding_dict["ltp"]
-        if avg > 0:
-            holding_dict["pnl_pct"] = round((ltp - avg) / avg * 100, 2)
-
-        try:
-            df = get_historical_candles(sym, "15m")
-            if not df.empty:
-                from analysis.technicals import add_indicators
-                df = add_indicators(df)
-            opt_df  = get_option_chain(sym, ltp)
-            opt_info = option_score(opt_df, ltp) if not opt_df.empty else {}
-        except Exception:
-            df = None; opt_info = {}
-
-        result = analyse_holding(holding_dict, df, opt_info)
-        result["exchange"] = h.get("exchange", "NSE")
-        results.append(result)
-
-    # ── Analyse each option position ──────────────────────────────────────
     for p in positions:
         sym = p.get("tradingsymbol", "")
-        qty = int(p.get("quantity", 0) or 0)
-        if qty == 0:
+        if not ("CE" in sym.upper() or "PE" in sym.upper()):
             continue
+
+        # Extract underlying
+        m = _re.match(r"([A-Z&]+)\d", sym.upper())
+        underlying = m.group(1) if m else None
+
         pos_dict = {
-            "symbol":    sym,
-            "avg_price": float(p.get("average_price", 0) or 0),
-            "ltp":       float(p.get("last_price", 0) or 0),
-            "pnl":       float(p.get("pnl", 0) or 0),
-            "quantity":  qty,
-            "product":   p.get("product", ""),
+            "symbol":      sym,
+            "avg_price":   float(p.get("average_price", 0) or 0),
+            "ltp":         float(p.get("last_price",    0) or 0),
+            "pnl":         float(p.get("pnl",           0) or 0),
+            "close_price": float(p.get("close_price",   0) or 0),
+            "quantity":    int(p.get("quantity",         0) or 0),
         }
 
-        # Extract underlying symbol from option name e.g. VEDL26JUN420CE → VEDL
-        import re
-        underlying = re.match(r"([A-Z]+)\d", sym)
-        underlying = underlying.group(1) if underlying else None
-
         try:
-            und_df  = get_historical_candles(underlying, "15m") if underlying else None
+            und_quote  = get_live_quote(underlying) if underlying else {}
+            spot       = float(und_quote.get("ltp", 0) or 0)
+            und_df     = get_historical_candles(underlying, "15m") if underlying else None
             if und_df is not None and not und_df.empty:
-                from analysis.technicals import add_indicators
                 und_df = add_indicators(und_df)
-            und_ltp = float(get_live_quote(underlying).get("ltp", 0)) if underlying else 0
-            opt_df  = get_option_chain(underlying, und_ltp) if underlying else None
-            opt_info = option_score(opt_df, und_ltp) if (opt_df is not None and not opt_df.empty) else {}
+            opt_df     = get_option_chain(underlying, spot) if underlying and spot else None
+            chain_sum  = option_score(opt_df, spot) if (opt_df is not None and not opt_df.empty) else {}
         except Exception:
-            und_df = None; opt_info = {}
+            spot = 0; und_df = None; opt_df = None; chain_sum = {}
 
-        result = analyse_position(pos_dict, und_df, opt_info)
-        result["exchange"] = p.get("exchange", "NFO")
+        chain_exp = opt_df.attrs.get("expiry", "") if opt_df is not None and not opt_df.empty else ""
+        result = analyse_option_position(pos_dict, spot, und_df, opt_df, chain_sum, chain_expiry=chain_exp)
         results.append(result)
 
-    # Sort: EXIT first, then REVIEW, then BOOK PROFIT, then HOLD, BUY MORE last
-    order = {"EXIT": 0, "REVIEW": 1, "BOOK PROFIT": 2, "HOLD": 3, "BUY MORE": 4}
-    results.sort(key=lambda x: order.get(x["signal"], 5))
+    # Sort: EXIT NOW → EXIT → PARTIAL EXIT → HOLD → ADD MORE → BOOK PROFIT
+    order = {"EXIT NOW": 0, "EXIT": 1, "PARTIAL EXIT": 2,
+             "REVIEW": 3, "HOLD": 4, "BOOK PROFIT": 5, "ADD MORE": 6}
+    results.sort(key=lambda x: order.get(x["signal"], 9))
 
     return jsonify({"status": "ok", "analysis": results,
                     "updated_at": datetime.now(NSE_TZ).strftime("%H:%M:%S IST")})
