@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: yara-stock-dashboard
+    runtime: python
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn web_app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: LOGIN_USERNAME
+        value: hyfa
+      - key: LOGIN_PASSWORD_HASH
+        value: 506cea6b5ec317b03b603f75c5ff17752c098e456dda31796feb7df9d287d2f9
+      - key: UPSTOX_ACCESS_TOKEN
+        sync: false
+      - key: UPSTOX_API_KEY
+        sync: false
+      - key: UPSTOX_SECRET
+        sync: false
+      - key: WHATSAPP_NUMBER
+        value: "+919744636565"
+      - key: CALLMEBOT_API_KEY
+        sync: false
