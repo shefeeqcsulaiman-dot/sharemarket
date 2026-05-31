@@ -526,6 +526,28 @@
             <div id="reasonsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-2"></div>
         </div>
 
+        <!-- ── PORTFOLIO ANALYSIS PANEL ── -->
+        <div class="card p-5" id="portfolioAnalysisPanel">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
+                    <i data-lucide="briefcase" class="w-3.5 h-3.5 text-indigo-400"></i>
+                    My Portfolio — AI Analysis
+                </h3>
+                <div class="flex items-center gap-3">
+                    <span id="portfolioUpdatedAt" class="text-[10px] font-mono text-gray-600">—</span>
+                    <div class="flex items-center gap-1.5 text-[10px] font-mono text-gray-600">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 pulse-dot"></span>
+                        Next in <span id="portfolioCountdown" class="text-indigo-400 font-bold">60</span>s
+                    </div>
+                </div>
+            </div>
+            <div id="portfolioAnalysisBody">
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" id="portfolioCards">
+                    <div class="text-xs text-gray-600 col-span-full py-3">Loading portfolio analysis…</div>
+                </div>
+            </div>
+        </div>
+
         <!-- CE Options List -->
         <div class="card p-5">
             <div class="flex items-center justify-between mb-3">
@@ -1290,6 +1312,123 @@
         rsiChart.resize(document.getElementById('rsiContainer').clientWidth, 80);
     });
 
+    // ── Portfolio Analysis Panel (1-min auto-refresh) ─────────────────────
+    let portfolioAnalysisTimer  = null;
+    let portfolioCountdownTimer = null;
+    let portfolioCountdownVal   = 60;
+
+    const SIG_CONFIG = {
+        'BUY MORE':    { color: '#10b981', bg: 'rgba(16,185,129,0.10)', border: 'rgba(16,185,129,0.3)'  },
+        'HOLD':        { color: '#6366f1', bg: 'rgba(99,102,241,0.10)', border: 'rgba(99,102,241,0.3)'  },
+        'REVIEW':      { color: '#f59e0b', bg: 'rgba(245,158,11,0.10)', border: 'rgba(245,158,11,0.3)'  },
+        'BOOK PROFIT': { color: '#f97316', bg: 'rgba(249,115,22,0.10)', border: 'rgba(249,115,22,0.3)'  },
+        'EXIT':        { color: '#ef4444', bg: 'rgba(239,68,68,0.10)',  border: 'rgba(239,68,68,0.3)'   },
+    };
+
+    async function loadPortfolioAnalysis() {
+        try {
+            const res  = await fetch('/api/portfolio/analysis');
+            const data = await res.json();
+
+            if (!res.ok || data.need_auth) {
+                document.getElementById('portfolioCards').innerHTML =
+                    `<div class="col-span-full text-xs text-amber-400 flex items-center gap-2">
+                        <i data-lucide="lock" class="w-4 h-4"></i>
+                        Portfolio not connected — <a href="/auth/upstox" target="_blank" class="underline text-indigo-400">Login with Upstox</a>
+                    </div>`;
+                lucide.createIcons();
+                return;
+            }
+
+            document.getElementById('portfolioUpdatedAt').textContent = `Updated ${data.updated_at}`;
+            portfolioCountdownVal = 60;
+
+            const cards = document.getElementById('portfolioCards');
+            if (!data.analysis || !data.analysis.length) {
+                cards.innerHTML = '<div class="col-span-full text-xs text-gray-600 py-3">No open positions or holdings found.</div>';
+                return;
+            }
+
+            cards.innerHTML = data.analysis.map(item => {
+                const cfg      = SIG_CONFIG[item.signal] || SIG_CONFIG['HOLD'];
+                const pnlColor = item.pnl >= 0 ? '#10b981' : '#ef4444';
+                const typeTag  = item.type === 'option'
+                    ? `<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-950/50 text-amber-400">OPTION${item.dte != null ? ' · ' + item.dte + 'd' : ''}</span>`
+                    : `<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-blue-950/50 text-blue-400">STOCK</span>`;
+
+                return `
+                <div class="rounded-xl p-4 border transition hover:opacity-90"
+                     style="background:${cfg.bg}; border-color:${cfg.border}">
+
+                    <div class="flex items-start justify-between mb-3">
+                        <div>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="font-bold text-gray-100 text-sm">${item.symbol}</span>
+                                ${typeTag}
+                            </div>
+                            <div class="text-[10px] font-mono text-gray-500 mt-0.5">
+                                Qty ${item.qty} · Avg ₹${item.avg_price} · LTP ₹${item.ltp}
+                            </div>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <div class="text-xs font-bold font-mono px-2.5 py-1 rounded-full border"
+                                 style="color:${cfg.color}; background:${cfg.bg}; border-color:${cfg.border}">
+                                ${item.signal}
+                            </div>
+                            <div class="text-[11px] font-mono font-bold mt-1.5" style="color:${pnlColor}">
+                                ${item.pnl >= 0 ? '+' : ''}₹${Math.abs(item.pnl).toLocaleString('en-IN', {maximumFractionDigits:0})}
+                                ${item.pnl_pct != null ? `(${item.pnl_pct >= 0 ? '+' : ''}${item.pnl_pct}%)` : ''}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="space-y-1">
+                        ${(item.reasons || []).map(r =>
+                            `<div class="text-[11px] text-gray-400 flex items-start gap-1.5">
+                                <span class="mt-0.5 shrink-0 w-1 h-1 rounded-full bg-gray-600 inline-block"></span>
+                                ${r}
+                            </div>`
+                        ).join('')}
+                    </div>
+
+                    <!-- Score bar -->
+                    <div class="mt-3 pt-2 border-t border-white/[.05]">
+                        <div class="flex justify-between text-[10px] font-mono text-gray-600 mb-1">
+                            <span>Signal strength</span>
+                            <span style="color:${cfg.color}">${item.score}/100</span>
+                        </div>
+                        <div class="h-1 bg-gray-900 rounded-full overflow-hidden">
+                            <div class="h-full rounded-full transition-all duration-700"
+                                 style="width:${item.score}%; background:${cfg.color}"></div>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+
+            lucide.createIcons();
+        } catch (e) {
+            document.getElementById('portfolioCards').innerHTML =
+                '<div class="col-span-full text-xs text-gray-600">Could not load portfolio analysis.</div>';
+        }
+    }
+
+    function startPortfolioTimer() {
+        clearInterval(portfolioAnalysisTimer);
+        clearInterval(portfolioCountdownTimer);
+        portfolioCountdownVal = 60;
+
+        portfolioAnalysisTimer = setInterval(() => {
+            loadPortfolioAnalysis();
+            portfolioCountdownVal = 60;
+        }, 60000);
+
+        portfolioCountdownTimer = setInterval(() => {
+            portfolioCountdownVal = Math.max(0, portfolioCountdownVal - 1);
+            const el = document.getElementById('portfolioCountdown');
+            if (el) el.textContent = portfolioCountdownVal;
+        }, 1000);
+    }
+
     // ── Portfolio drawer ──────────────────────────────────────────────────
     let portfolioOpen = false;
 
@@ -1442,9 +1581,11 @@
     // ── Init ───────────────────────────────────────────────────────────────
     renderSymbolButtons();
     fetchSignal();
-    startTimers();   // auto-refresh ON by default
+    startTimers();
     updateMarketBar();
-    setInterval(updateMarketBar, 30000);  // refresh market bar every 30s
+    setInterval(updateMarketBar, 30000);
+    loadPortfolioAnalysis();   // load immediately on page open
+    startPortfolioTimer();     // then every 60 seconds
 </script>
 </body>
 </html>
