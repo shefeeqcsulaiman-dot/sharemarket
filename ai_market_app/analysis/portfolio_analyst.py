@@ -8,6 +8,8 @@ import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from analysis.greeks import calculate_greeks, theta_decay_forecast
+
 NSE_TZ = ZoneInfo("Asia/Kolkata")
 
 MONTH_MAP = {
@@ -373,6 +375,15 @@ def analyse_option_position(position: dict, spot: float,
         signal = "BOOK PROFIT"; color = "emerald"
         action = f"Take full profits at current premium Rs{ltp:.2f}"
 
+    # ── Greeks ───────────────────────────────────────────────────────────
+    iv_val = chain.get("call_iv" if is_call else "put_iv", 0) or 0
+    greeks = calculate_greeks(spot, strike, dte or 30, iv_val, opt_type)
+    theta_forecast = theta_decay_forecast(greeks.get("theta"), dte or 30, ltp)
+
+    # SL / Target levels for this position
+    sl_level     = round(avg_price * 0.50, 2) if avg_price > 0 else None   # 50% loss on premium
+    target_level = round(avg_price * 1.75, 2) if avg_price > 0 else None   # 75% gain on premium
+
     return {
         "symbol":         sym,
         "underlying":     underlying,
@@ -392,9 +403,13 @@ def analyse_option_position(position: dict, spot: float,
         "qty":            qty,
         "spot":           spot,
         "breakeven":      round(breakeven, 2) if avg_price > 0 else None,
+        "sl_level":       sl_level,
+        "target_level":   target_level,
         "reasons":        final_reasons[:6],
         "chain":          chain,
         "technicals":     tech_summary,
+        "greeks":         greeks,
+        "theta_forecast": theta_forecast,
         "pcr":            round(float(pcr), 2),
         "max_pain":       round(float(max_pain), 2) if max_pain else None,
         "call_wall":      call_wall,

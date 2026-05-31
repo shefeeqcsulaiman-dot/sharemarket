@@ -18,6 +18,8 @@ from analysis.risk_engine import calculate_trade_levels, recommend_ce_strikes
 from analysis.patterns import detect as detect_patterns
 from analysis.volatility import classify as classify_volatility
 from analysis.portfolio_analyst import analyse_option_position
+from analysis.strategy_recognizer import detect_strategy, group_by_underlying
+from alerts.whatsapp_alert import maybe_alert
 
 app = Flask(__name__)
 NSE_TZ = ZoneInfo("Asia/Kolkata")
@@ -327,12 +329,41 @@ def portfolio_analysis():
         result = analyse_option_position(pos_dict, spot, und_df, opt_df, chain_sum, chain_expiry=chain_exp)
         results.append(result)
 
+    # ── Strategy detection (group by underlying) ─────────────────────────
+    groups   = group_by_underlying(positions)
+    strategies = {}
+    for und, pos_list in groups.items():
+        pos_dicts = [{"symbol": p.get("tradingsymbol",""),
+                      "avg_price": float(p.get("average_price",0) or 0),
+                      "ltp":       float(p.get("last_price",0) or 0),
+                      "quantity":  int(p.get("quantity",0) or 0),
+                      "pnl":       float(p.get("pnl",0) or 0)} for p in pos_list]
+        strategies[und] = detect_strategy(pos_dicts)
+
+    # ── SL breach check ───────────────────────────────────────────────────
+    for r in results:
+        sl  = r.get("sl_level")
+        tgt = r.get("target_level")
+        ltp = r.get("ltp", 0)
+        if sl  and ltp <= sl:
+            r["sl_breached"] = True
+        if tgt and ltp >= tgt:
+            r["target_hit"] = True
+
+    # ── Send WhatsApp alerts ──────────────────────────────────────────────
+    for r in results:
+        try:
+            maybe_alert(r)
+        except Exception:
+            pass
+
     # Sort: EXIT NOW → EXIT → PARTIAL EXIT → HOLD → ADD MORE → BOOK PROFIT
     order = {"EXIT NOW": 0, "EXIT": 1, "PARTIAL EXIT": 2,
              "REVIEW": 3, "HOLD": 4, "BOOK PROFIT": 5, "ADD MORE": 6}
     results.sort(key=lambda x: order.get(x["signal"], 9))
 
     return jsonify({"status": "ok", "analysis": results,
+                    "strategies": strategies,
                     "updated_at": datetime.now(NSE_TZ).strftime("%H:%M:%S IST")})
 
 

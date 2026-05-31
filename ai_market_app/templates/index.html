@@ -1351,7 +1351,26 @@
                 return;
             }
 
-            cards.innerHTML = data.analysis.map(item => renderOptionCard(item)).join('');
+            // Strategy summary banners
+            let strategyHtml = '';
+            if (data.strategies) {
+                strategyHtml = Object.entries(data.strategies).map(([und, strat]) => {
+                    const pnlColor = strat.total_pnl >= 0 ? '#10b981' : '#ef4444';
+                    const beStr = strat.breakevens && strat.breakevens.length
+                        ? `BE: ${strat.breakevens.map(b => '₹'+b).join(' / ')}`
+                        : '';
+                    return `<div class="flex flex-wrap items-center gap-4 px-4 py-3 rounded-xl bg-indigo-950/30 border border-indigo-900/30 text-xs font-mono mb-2">
+                        <span class="text-indigo-400 font-bold">${und}</span>
+                        <span class="text-gray-300 font-bold">${strat.name}</span>
+                        <span class="text-gray-500">${strat.legs} legs</span>
+                        <span style="color:${pnlColor}" class="font-bold">P&L: ${strat.total_pnl >= 0 ? '+' : ''}₹${Math.abs(strat.total_pnl).toLocaleString('en-IN',{maximumFractionDigits:0})}</span>
+                        ${strat.max_loss != null ? `<span class="text-red-400">Max loss: ₹${Math.abs(strat.max_loss).toLocaleString('en-IN',{maximumFractionDigits:0})}</span>` : ''}
+                        ${strat.max_profit && strat.max_profit !== 'Unlimited' ? `<span class="text-emerald-400">Max profit: ₹${Number(strat.max_profit).toLocaleString('en-IN',{maximumFractionDigits:0})}</span>` : ''}
+                        ${beStr ? `<span class="text-amber-400">${beStr}</span>` : ''}
+                    </div>`;
+                }).join('');
+            }
+            cards.innerHTML = strategyHtml + data.analysis.map(item => renderOptionCard(item)).join('');
             lucide.createIcons();
         } catch (e) {
             cards.innerHTML = '<div class="text-xs text-gray-600">Could not load analysis. Check server.</div>';
@@ -1458,17 +1477,34 @@
                     ${t.vwap ? `<div><span class="text-gray-500">VWAP</span> <strong class="text-purple-400">₹${t.vwap}</strong></div>` : ''}
                 </div>
 
-                <!-- Col 4: OI walls & action -->
+                <!-- Col 4: Greeks -->
                 <div class="space-y-2">
-                    <div class="text-gray-600 text-[10px] uppercase tracking-wider">OI Structure</div>
-                    ${item.call_wall ? `<div><span class="text-red-500">Call Wall</span> <strong class="text-red-400">₹${item.call_wall}</strong></div>` : ''}
-                    ${item.put_wall  ? `<div><span class="text-emerald-500">Put Wall</span> <strong class="text-emerald-400">₹${item.put_wall}</strong></div>` : ''}
-                    ${item.max_pain  ? `<div><span class="text-gray-500">Max Pain</span> <strong class="text-amber-400">₹${item.max_pain}</strong></div>` : ''}
-                    <div><span class="text-gray-500">Bias</span>
-                        <strong style="color:${item.chain_bias==='BULLISH'||item.chain_bias==='BULLISH_BREAKOUT'?'#10b981':item.chain_bias==='BEARISH'?'#ef4444':'#9ca3af'}">
-                            ${item.chain_bias || 'NEUTRAL'}
-                        </strong>
+                    <div class="text-gray-600 text-[10px] uppercase tracking-wider">Greeks (B-S)</div>
+                    ${item.greeks && item.greeks.delta != null ? `
+                    <div><span class="text-gray-500">Delta</span>
+                        <strong style="color:${Math.abs(item.greeks.delta)>0.5?'#10b981':'#f59e0b'}">${item.greeks.delta > 0 ? '+' : ''}${item.greeks.delta}</strong>
                     </div>
+                    <div><span class="text-gray-500">Theta</span>
+                        <strong class="text-red-400">${item.greeks.theta}/day</strong>
+                    </div>
+                    <div><span class="text-gray-500">Vega</span>
+                        <strong class="text-purple-400">${item.greeks.vega}</strong>
+                    </div>
+                    <div><span class="text-gray-500">Gamma</span>
+                        <strong class="text-blue-400">${item.greeks.gamma}</strong>
+                    </div>
+                    ${item.theta_forecast && item.theta_forecast.daily_rs ? `
+                    <div class="text-[10px] text-red-400/70">
+                        -₹${(item.theta_forecast.daily_rs * item.qty).toFixed(0)}/day total
+                    </div>` : ''}
+                    ${item.greeks.theoretical_price ? `
+                    <div><span class="text-gray-500">Fair Value</span>
+                        <strong class="text-cyan-400">₹${item.greeks.theoretical_price}</strong>
+                    </div>` : ''}
+                    ` : '<div class="text-gray-600 text-[10px]">IV unavailable</div>'}
+                    <!-- SL/Target badges -->
+                    ${item.sl_level ? `<div><span class="text-gray-500">SL</span> <strong class="text-red-400">₹${item.sl_level}</strong>${item.sl_breached ? ' 🔴 HIT' : ''}</div>` : ''}
+                    ${item.target_level ? `<div><span class="text-gray-500">Target</span> <strong class="text-emerald-400">₹${item.target_level}</strong>${item.target_hit ? ' ✅ HIT' : ''}</div>` : ''}
                 </div>
             </div>
 
