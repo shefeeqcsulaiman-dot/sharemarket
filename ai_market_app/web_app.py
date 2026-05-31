@@ -1,7 +1,9 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import os, urllib3, requests as _req
+urllib3.disable_warnings()
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, redirect
 
 from config.symbols import SYMBOLS
 from config.settings import DEFAULT_MARKET_SCORE
@@ -123,6 +125,152 @@ def _ai_commentary(signal: str, confidence: float, technical: dict,
 @app.route("/")
 def index():
     return render_template("index.html", symbols=list(SYMBOLS.keys()))
+
+
+## ── Upstox OAuth helpers ────────────────────────────────────────────────────
+
+def _upstox_headers():
+    from dotenv import load_dotenv; load_dotenv(override=True)
+    token = os.getenv("UPSTOX_ACCESS_TOKEN", "")
+    return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+
+def _upstox_get(path: str, params: dict | None = None):
+    r = _req.get(f"https://api.upstox.com{path}",
+                 headers=_upstox_headers(), params=params,
+                 timeout=10, verify=False)
+    return r.json()
+
+
+@app.route("/auth/upstox")
+def auth_upstox():
+    """Redirect browser to Upstox login page."""
+    from dotenv import load_dotenv; load_dotenv()
+    api_key  = os.getenv("UPSTOX_API_KEY", "")
+    redir    = os.getenv("UPSTOX_REDIRECT_URI", "http://127.0.0.1:5000/auth/callback")
+    url = (
+        "https://api.upstox.com/v2/login/authorization/dialog"
+        f"?response_type=code&client_id={api_key}&redirect_uri={redir}"
+    )
+    return redirect(url)
+
+
+@app.route("/auth/callback")
+def auth_callback():
+    """Upstox redirects here with ?code=XXX — exchange for access token and save."""
+    from dotenv import load_dotenv; load_dotenv()
+    code     = request.args.get("code", "")
+    api_key  = os.getenv("UPSTOX_API_KEY", "")
+    secret   = os.getenv("UPSTOX_SECRET", "")
+    redir    = os.getenv("UPSTOX_REDIRECT_URI", "http://127.0.0.1:5000/auth/callback")
+
+    if not code:
+        return "No code received from Upstox.", 400
+
+    resp = _req.post(
+        "https://api.upstox.com/v2/login/authorization/token",
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+        data={
+            "code":          code,
+            "client_id":     api_key,
+            "client_secret": secret,
+            "redirect_uri":  redir,
+            "grant_type":    "authorization_code",
+        },
+        timeout=10, verify=False,
+    )
+    result = resp.json()
+
+    if result.get("status") == "success" or result.get("access_token"):
+        token = result.get("access_token") or result.get("data", {}).get("access_token", "")
+        # Save token to .env
+        env_path = os.path.join(os.path.dirname(__file__), ".env")
+        lines = open(env_path).readlines() if os.path.exists(env_path) else []
+        updated = [l for l in lines if not l.startswith("UPSTOX_ACCESS_TOKEN=")]
+        updated.append(f"UPSTOX_ACCESS_TOKEN={token}\n")
+        open(env_path, "w").writelines(updated)
+        # Reload env
+        os.environ["UPSTOX_ACCESS_TOKEN"] = token
+        import data.upstox as _up
+        _up.INSTRUMENT_KEYS  # ensure module reloaded
+        return redirect("/?auth=success")
+    else:
+        return jsonify({"error": "Token exchange failed", "detail": result}), 400
+
+
+@app.route("/api/portfolio/positions")
+def portfolio_positions():
+    """Live open positions from Upstox."""
+    data = _upstox_get("/v2/portfolio/short-term-positions")
+    if data.get("status") == "success":
+        rows = data.get("data") or []
+        result = []
+        for p in rows:
+            qty        = int(p.get("quantity", 0) or 0)
+            avg_price  = float(p.get("average_price", 0) or 0)
+            ltp        = float(p.get("last_price", 0) or 0)
+            pnl        = float(p.get("pnl", 0) or 0)
+            day_change = float(p.get("day_change_percentage", 0) or 0)
+            result.append({
+                "symbol":        p.get("tradingsymbol", ""),
+                "product":       p.get("product", ""),
+                "quantity":      qty,
+                "avg_price":     round(avg_price, 2),
+                "ltp":           round(ltp, 2),
+                "pnl":           round(pnl, 2),
+                "day_change_pct":round(day_change, 2),
+                "exchange":      p.get("exchange", ""),
+                "instrument_type": p.get("instrument_type", ""),
+            })
+        return jsonify({"status": "ok", "positions": result, "count": len(result)})
+    else:
+        return jsonify({"status": "error", "error": data.get("errors", "Unknown error"),
+                        "need_auth": True}), 401
+
+
+@app.route("/api/portfolio/holdings")
+def portfolio_holdings():
+    """Long-term holdings from Upstox."""
+    data = _upstox_get("/v2/portfolio/long-term-holdings")
+    if data.get("status") == "success":
+        rows = data.get("data") or []
+        result = []
+        total_invested = 0; total_current = 0
+        for h in rows:
+            qty       = int(h.get("quantity", 0) or 0)
+            avg       = float(h.get("average_price", 0) or 0)
+            ltp       = float(h.get("last_price", 0) or 0)
+            invested  = round(qty * avg, 2)
+            current   = round(qty * ltp, 2)
+            pnl       = round(current - invested, 2)
+            pnl_pct   = round((pnl / invested * 100), 2) if invested else 0
+            total_invested += invested; total_current += current
+            result.append({
+                "symbol":    h.get("tradingsymbol", ""),
+                "exchange":  h.get("exchange", ""),
+                "quantity":  qty,
+                "avg_price": round(avg, 2),
+                "ltp":       round(ltp, 2),
+                "invested":  invested,
+                "current":   current,
+                "pnl":       pnl,
+                "pnl_pct":   pnl_pct,
+                "isin":      h.get("isin", ""),
+            })
+        total_pnl     = round(total_current - total_invested, 2)
+        total_pnl_pct = round((total_pnl / total_invested * 100), 2) if total_invested else 0
+        return jsonify({
+            "status": "ok", "holdings": result,
+            "summary": {
+                "total_invested": round(total_invested, 2),
+                "total_current":  round(total_current, 2),
+                "total_pnl":      total_pnl,
+                "total_pnl_pct":  total_pnl_pct,
+            }
+        })
+    else:
+        return jsonify({"status": "error", "error": data.get("errors", ""),
+                        "need_auth": True}), 401
 
 
 @app.route("/api/market-bar")

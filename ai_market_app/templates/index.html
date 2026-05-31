@@ -152,6 +152,10 @@
             <span id="dataStatusLabel" class="font-mono text-gray-400 text-[11px]">CHECKING…</span>
         </div>
         <div id="lastRefresh" class="text-gray-500 font-mono text-[11px] hidden md:block">—</div>
+        <button onclick="togglePortfolio()" id="portfolioBtn"
+            class="flex items-center gap-1.5 bg-gray-900 hover:bg-gray-800 border border-gray-700 text-gray-300 text-xs font-semibold px-3 py-1.5 rounded-lg transition">
+            <i data-lucide="briefcase" class="w-3.5 h-3.5 text-indigo-400"></i>Portfolio
+        </button>
         <div class="flex items-center gap-1.5 bg-gray-900 border border-gray-800 rounded-lg px-3 py-1.5 text-[11px] font-mono text-gray-400 hidden md:flex">
             <i data-lucide="clock" class="w-3 h-3 text-indigo-400"></i>
             Next in <span id="countdown" class="text-indigo-400 font-bold">30</span>s
@@ -616,6 +620,119 @@
         </div>
 
     </main>
+</div>
+
+<!-- ─── PORTFOLIO DRAWER ─── -->
+<div id="portfolioDrawer" class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+     style="background:rgba(0,0,0,0.7);backdrop-filter:blur(6px)">
+    <div class="w-full max-w-4xl bg-[#0f172a] border border-white/10 rounded-2xl shadow-2xl flex flex-col max-h-[88vh]">
+
+        <!-- Drawer header -->
+        <div class="flex items-center justify-between px-6 py-4 border-b border-white/[.06]">
+            <div class="flex items-center gap-3">
+                <i data-lucide="briefcase" class="w-5 h-5 text-indigo-400"></i>
+                <h2 class="text-base font-bold text-gray-100">My Portfolio</h2>
+                <span id="portfolioAuthBadge" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-950/50 text-amber-400 border border-amber-800/40 hidden">Login required</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <button onclick="loadPortfolio()" class="text-xs text-indigo-400 hover:text-indigo-300 font-mono flex items-center gap-1">
+                    <i data-lucide="refresh-cw" class="w-3 h-3"></i>Refresh
+                </button>
+                <button onclick="togglePortfolio()" class="text-gray-500 hover:text-gray-300 ml-2">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Auth prompt -->
+        <div id="portfolioAuthPrompt" class="hidden p-8 text-center space-y-4">
+            <i data-lucide="lock" class="w-12 h-12 text-indigo-400 mx-auto"></i>
+            <p class="text-gray-300 font-semibold">Connect your Upstox account to view positions</p>
+            <p class="text-gray-500 text-sm">One-time login — your credentials stay on your device</p>
+            <a href="/auth/upstox" target="_blank"
+               class="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-5 py-2.5 rounded-xl transition text-sm">
+                <i data-lucide="log-in" class="w-4 h-4"></i>Login with Upstox
+            </a>
+            <p class="text-[11px] text-gray-600">After login, click Refresh above</p>
+        </div>
+
+        <!-- Content -->
+        <div id="portfolioContent" class="overflow-y-auto flex-1 p-6 space-y-6">
+
+            <!-- Summary bar -->
+            <div id="portfolioSummary" class="hidden grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div class="card px-4 py-3">
+                    <span class="text-[10px] text-gray-500 font-mono block">INVESTED</span>
+                    <strong id="sumInvested" class="text-sm font-mono text-gray-200">—</strong>
+                </div>
+                <div class="card px-4 py-3">
+                    <span class="text-[10px] text-gray-500 font-mono block">CURRENT</span>
+                    <strong id="sumCurrent" class="text-sm font-mono text-gray-200">—</strong>
+                </div>
+                <div class="card px-4 py-3">
+                    <span class="text-[10px] text-gray-500 font-mono block">TOTAL P&L</span>
+                    <strong id="sumPnl" class="text-sm font-mono">—</strong>
+                </div>
+                <div class="card px-4 py-3">
+                    <span class="text-[10px] text-gray-500 font-mono block">RETURN %</span>
+                    <strong id="sumPnlPct" class="text-sm font-mono">—</strong>
+                </div>
+            </div>
+
+            <!-- Positions (today's trades) -->
+            <div>
+                <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-400"></i>Today's Positions
+                    <span id="positionsCount" class="text-[10px] font-mono text-gray-600"></span>
+                </h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-xs">
+                        <thead class="border-b border-white/5 text-[10px] font-mono text-gray-500">
+                            <tr>
+                                <th class="py-2 text-left">Symbol</th>
+                                <th class="py-2 text-right">Qty</th>
+                                <th class="py-2 text-right">Avg</th>
+                                <th class="py-2 text-right">LTP</th>
+                                <th class="py-2 text-right">P&L</th>
+                                <th class="py-2 text-right">Day Chg%</th>
+                                <th class="py-2 text-left">Type</th>
+                            </tr>
+                        </thead>
+                        <tbody id="positionsBody" class="divide-y divide-white/[.03] text-gray-300">
+                            <tr><td colspan="7" class="py-4 text-gray-600">Loading positions…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Holdings -->
+            <div>
+                <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <i data-lucide="package" class="w-3.5 h-3.5 text-emerald-400"></i>Holdings (Long-term)
+                    <span id="holdingsCount" class="text-[10px] font-mono text-gray-600"></span>
+                </h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-xs">
+                        <thead class="border-b border-white/5 text-[10px] font-mono text-gray-500">
+                            <tr>
+                                <th class="py-2 text-left">Symbol</th>
+                                <th class="py-2 text-right">Qty</th>
+                                <th class="py-2 text-right">Avg Buy</th>
+                                <th class="py-2 text-right">LTP</th>
+                                <th class="py-2 text-right">Invested</th>
+                                <th class="py-2 text-right">Current</th>
+                                <th class="py-2 text-right">P&L</th>
+                                <th class="py-2 text-right">Return%</th>
+                            </tr>
+                        </thead>
+                        <tbody id="holdingsBody" class="divide-y divide-white/[.03] text-gray-300">
+                            <tr><td colspan="8" class="py-4 text-gray-600">Loading holdings…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- FOOTER -->
@@ -1172,6 +1289,129 @@
         mainChart.resize(document.getElementById('chartContainer').clientWidth, 300);
         rsiChart.resize(document.getElementById('rsiContainer').clientWidth, 80);
     });
+
+    // ── Portfolio drawer ──────────────────────────────────────────────────
+    let portfolioOpen = false;
+
+    function togglePortfolio() {
+        portfolioOpen = !portfolioOpen;
+        const drawer = document.getElementById('portfolioDrawer');
+        drawer.classList.toggle('hidden', !portfolioOpen);
+        lucide.createIcons();
+        if (portfolioOpen) loadPortfolio();
+    }
+
+    // Close on backdrop click
+    document.getElementById('portfolioDrawer').addEventListener('click', e => {
+        if (e.target === document.getElementById('portfolioDrawer')) togglePortfolio();
+    });
+
+    async function loadPortfolio() {
+        document.getElementById('positionsBody').innerHTML =
+            '<tr><td colspan="7" class="py-4 text-gray-500 text-center"><div class="inline-block w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div></td></tr>';
+        document.getElementById('holdingsBody').innerHTML =
+            '<tr><td colspan="8" class="py-4 text-gray-500 text-center"><div class="inline-block w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div></td></tr>';
+
+        const [posRes, holdRes] = await Promise.all([
+            fetch('/api/portfolio/positions').then(r => r.json()).catch(() => ({ status: 'error' })),
+            fetch('/api/portfolio/holdings').then(r => r.json()).catch(() => ({ status: 'error' })),
+        ]);
+
+        const authPrompt = document.getElementById('portfolioAuthPrompt');
+        const content    = document.getElementById('portfolioContent');
+        const authBadge  = document.getElementById('portfolioAuthBadge');
+
+        if (posRes.need_auth || holdRes.need_auth) {
+            authPrompt.classList.remove('hidden');
+            content.classList.add('hidden');
+            authBadge.classList.remove('hidden');
+            lucide.createIcons();
+            return;
+        }
+        authPrompt.classList.add('hidden');
+        content.classList.remove('hidden');
+        authBadge.classList.add('hidden');
+
+        renderPositions(posRes.positions || []);
+        renderHoldings(holdRes.holdings || [], holdRes.summary || {});
+    }
+
+    function renderPositions(rows) {
+        const tb = document.getElementById('positionsBody');
+        document.getElementById('positionsCount').textContent = `(${rows.length})`;
+        if (!rows.length) {
+            tb.innerHTML = '<tr><td colspan="7" class="py-4 text-gray-600 text-xs">No open positions today.</td></tr>';
+            return;
+        }
+        tb.innerHTML = rows.map(p => {
+            const pnlColor = p.pnl >= 0 ? '#10b981' : '#ef4444';
+            const dcColor  = p.day_change_pct >= 0 ? '#10b981' : '#ef4444';
+            return `<tr class="text-gray-300 hover:bg-white/[.02] transition">
+                <td class="py-2.5 pr-3">
+                    <span class="font-bold text-gray-100">${p.symbol}</span>
+                    <span class="text-[10px] font-mono text-gray-600 ml-1">${p.exchange}</span>
+                </td>
+                <td class="py-2.5 text-right font-mono">${p.quantity}</td>
+                <td class="py-2.5 text-right font-mono">${money(p.avg_price)}</td>
+                <td class="py-2.5 text-right font-mono font-bold text-gray-100">${money(p.ltp)}</td>
+                <td class="py-2.5 text-right font-mono font-bold" style="color:${pnlColor}">
+                    ${p.pnl >= 0 ? '+' : ''}${money(p.pnl)}
+                </td>
+                <td class="py-2.5 text-right font-mono text-xs" style="color:${dcColor}">
+                    ${p.day_change_pct >= 0 ? '+' : ''}${p.day_change_pct}%
+                </td>
+                <td class="py-2.5 text-left">
+                    <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[.05] text-gray-400">${p.instrument_type || p.product}</span>
+                </td>
+            </tr>`;
+        }).join('');
+    }
+
+    function renderHoldings(rows, summary) {
+        const tb = document.getElementById('holdingsBody');
+        document.getElementById('holdingsCount').textContent = `(${rows.length})`;
+
+        // Summary bar
+        if (summary.total_invested) {
+            const sumEl = document.getElementById('portfolioSummary');
+            sumEl.classList.remove('hidden');
+            sumEl.style.display = 'grid';
+            document.getElementById('sumInvested').textContent = money(summary.total_invested);
+            document.getElementById('sumCurrent').textContent  = money(summary.total_current);
+            const pnlEl = document.getElementById('sumPnl');
+            const pctEl = document.getElementById('sumPnlPct');
+            pnlEl.textContent = (summary.total_pnl >= 0 ? '+' : '') + money(summary.total_pnl);
+            pnlEl.style.color = summary.total_pnl >= 0 ? '#10b981' : '#ef4444';
+            pctEl.textContent = (summary.total_pnl_pct >= 0 ? '+' : '') + summary.total_pnl_pct + '%';
+            pctEl.style.color = summary.total_pnl_pct >= 0 ? '#10b981' : '#ef4444';
+        }
+
+        if (!rows.length) {
+            tb.innerHTML = '<tr><td colspan="8" class="py-4 text-gray-600 text-xs">No holdings found.</td></tr>';
+            return;
+        }
+        tb.innerHTML = rows.map(h => {
+            const pnlColor = h.pnl >= 0 ? '#10b981' : '#ef4444';
+            const pctColor = h.pnl_pct >= 0 ? '#10b981' : '#ef4444';
+            return `<tr class="text-gray-300 hover:bg-white/[.02] transition">
+                <td class="py-2.5 pr-3">
+                    <span class="font-bold text-gray-100">${h.symbol}</span>
+                    <span class="text-[10px] font-mono text-gray-600 ml-1">${h.exchange}</span>
+                </td>
+                <td class="py-2.5 text-right font-mono">${h.quantity}</td>
+                <td class="py-2.5 text-right font-mono">${money(h.avg_price)}</td>
+                <td class="py-2.5 text-right font-mono font-bold text-gray-100">${money(h.ltp)}</td>
+                <td class="py-2.5 text-right font-mono text-gray-400">${money(h.invested)}</td>
+                <td class="py-2.5 text-right font-mono">${money(h.current)}</td>
+                <td class="py-2.5 text-right font-mono font-bold" style="color:${pnlColor}">
+                    ${h.pnl >= 0 ? '+' : ''}${money(h.pnl)}
+                </td>
+                <td class="py-2.5 text-right font-mono font-bold" style="color:${pctColor}">
+                    ${h.pnl_pct >= 0 ? '+' : ''}${h.pnl_pct}%
+                </td>
+            </tr>`;
+        }).join('');
+    }
 
     // ── Market bar ────────────────────────────────────────────────────────
     function updateMarketBar() {
