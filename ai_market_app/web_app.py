@@ -1,9 +1,10 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import os, urllib3, requests as _req
+import hashlib, os, urllib3, requests as _req
 urllib3.disable_warnings()
 
-from flask import Flask, render_template, jsonify, request, redirect
+from flask import Flask, render_template, jsonify, request, redirect, session, url_for
+from functools import wraps
 
 from config.symbols import SYMBOLS
 from config.settings import DEFAULT_MARKET_SCORE
@@ -21,9 +22,52 @@ from analysis.portfolio_analyst import analyse_option_position
 from analysis.strategy_recognizer import detect_strategy, group_by_underlying
 from alerts.whatsapp_alert import maybe_alert
 
+from dotenv import load_dotenv
+load_dotenv(override=True)
+
 app = Flask(__name__)
+app.secret_key = os.getenv("SECRET_KEY", "yara-default-secret-2026")
 NSE_TZ = ZoneInfo("Asia/Kolkata")
 SUPPORTED_TIMEFRAMES = {"5m", "15m", "1h"}
+
+
+def _check_login(username: str, password: str) -> bool:
+    correct_user = os.getenv("LOGIN_USERNAME", "hyfa")
+    correct_hash = os.getenv("LOGIN_PASSWORD_HASH", "")
+    pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+    return username == correct_user and pwd_hash == correct_hash
+
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("logged_in"):
+            return redirect(url_for("login_page"))
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login_page():
+    if session.get("logged_in"):
+        return redirect("/")
+    error = None
+    username = ""
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        if _check_login(username, password):
+            session["logged_in"] = True
+            session["username"]  = username
+            return redirect("/")
+        error = "Incorrect username or password."
+    return render_template("login.html", error=error, username=username)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login_page"))
 
 
 def _iso(value):
@@ -126,6 +170,7 @@ def _ai_commentary(signal: str, confidence: float, technical: dict,
 
 
 @app.route("/")
+@login_required
 def index():
     return render_template("index.html", symbols=list(SYMBOLS.keys()))
 
@@ -202,6 +247,7 @@ def auth_callback():
 
 
 @app.route("/api/portfolio/positions")
+@login_required
 def portfolio_positions():
     """Live open positions from Upstox."""
     data = _upstox_get("/v2/portfolio/short-term-positions")
@@ -232,6 +278,7 @@ def portfolio_positions():
 
 
 @app.route("/api/portfolio/holdings")
+@login_required
 def portfolio_holdings():
     """Long-term holdings from Upstox."""
     data = _upstox_get("/v2/portfolio/long-term-holdings")
@@ -277,6 +324,7 @@ def portfolio_holdings():
 
 
 @app.route("/api/portfolio/analysis")
+@login_required
 def portfolio_analysis():
     """
     Deep option position analysis — CE/PE only.
@@ -368,6 +416,7 @@ def portfolio_analysis():
 
 
 @app.route("/api/market-bar")
+@login_required
 def market_bar():
     """Fast endpoint: Nifty, BankNifty live + US index quotes via Yahoo."""
     import requests, urllib3
@@ -403,6 +452,7 @@ def market_bar():
 
 
 @app.route("/api/quote/<symbol>")
+@login_required
 def quick_quote(symbol: str):
     symbol = symbol.upper()
     if symbol not in SYMBOLS:
@@ -421,6 +471,7 @@ def quick_quote(symbol: str):
 
 
 @app.route("/api/signal", methods=["POST"])
+@login_required
 def get_signal():
     body         = request.get_json(silent=True) or {}
     symbol       = body.get("symbol", "VEDL")
