@@ -497,6 +497,26 @@
             </div>
         </div>
 
+        <!-- ── OPTION POSITIONS — AI ANALYSIS ── -->
+        <div class="card p-5" id="portfolioAnalysisPanel">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
+                    <i data-lucide="activity" class="w-3.5 h-3.5 text-indigo-400"></i>
+                    Open Options — Live AI Analysis
+                </h3>
+                <div class="flex items-center gap-3">
+                    <span id="portfolioUpdatedAt" class="text-[10px] font-mono text-gray-600">—</span>
+                    <div class="flex items-center gap-1.5 text-[10px] font-mono text-gray-600">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 pulse-dot"></span>
+                        Refresh in <span id="portfolioCountdown" class="text-indigo-400 font-bold">60</span>s
+                    </div>
+                </div>
+            </div>
+            <div id="portfolioCards" class="space-y-4">
+                <div class="text-xs text-gray-600 py-3">Loading option positions…</div>
+            </div>
+        </div>
+
         <!-- ── CHART SECTION ── -->
         <div class="card p-5">
             <div class="flex items-center justify-between mb-3">
@@ -524,26 +544,6 @@
                 <i data-lucide="brain-circuit" class="w-3.5 h-3.5 text-indigo-400"></i>Signal Rationale
             </h3>
             <div id="reasonsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-2"></div>
-        </div>
-
-        <!-- ── OPTION POSITIONS — AI ANALYSIS ── -->
-        <div class="card p-5" id="portfolioAnalysisPanel">
-            <div class="flex items-center justify-between mb-4">
-                <h3 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
-                    <i data-lucide="activity" class="w-3.5 h-3.5 text-indigo-400"></i>
-                    Open Options — Live AI Analysis
-                </h3>
-                <div class="flex items-center gap-3">
-                    <span id="portfolioUpdatedAt" class="text-[10px] font-mono text-gray-600">—</span>
-                    <div class="flex items-center gap-1.5 text-[10px] font-mono text-gray-600">
-                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 pulse-dot"></span>
-                        Refresh in <span id="portfolioCountdown" class="text-indigo-400 font-bold">60</span>s
-                    </div>
-                </div>
-            </div>
-            <div id="portfolioCards" class="space-y-4">
-                <div class="text-xs text-gray-600 py-3">Loading option positions…</div>
-            </div>
         </div>
 
         <!-- CE Options List -->
